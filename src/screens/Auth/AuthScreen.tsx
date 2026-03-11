@@ -9,26 +9,41 @@ import {Colors, Typography, Spacing, Radii} from '../../constants/theme';
 import {supabase} from '../../services/supabase/client';
 
 const AuthScreen: React.FC = () => {
-  const [mode, setMode] = useState<'signin' | 'signup'>('signin');
+  const [mode, setMode] = useState<'signin' | 'signup' | 'confirm'>('signin');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
   const handleAuth = async () => {
-    if (!email || !password) {setError('Email ve şifre gerekli.'); return;}
+    if (!email.trim() || !password) {setError('Email ve şifre gerekli.'); return;}
+    if (password.length < 6) {setError('Şifre en az 6 karakter olmalı.'); return;}
     setLoading(true);
     setError('');
     try {
       if (mode === 'signup') {
-        const {error: e} = await supabase.auth.signUp({email, password});
+        const {data, error: e} = await supabase.auth.signUp({email: email.trim(), password});
         if (e) throw e;
+        // Email confirmation is required — session will be null
+        if (data.user && !data.session) {
+          setError('');
+          setMode('confirm');
+        }
       } else {
-        const {error: e} = await supabase.auth.signInWithPassword({email, password});
+        const {error: e} = await supabase.auth.signInWithPassword({email: email.trim(), password});
         if (e) throw e;
       }
     } catch (e: any) {
-      setError(e.message ?? 'Bir hata oluştu.');
+      const msg: string = e.message ?? '';
+      if (msg.includes('Invalid login credentials')) {
+        setError('Email veya şifre hatalı.');
+      } else if (msg.includes('User already registered')) {
+        setError('Bu email zaten kayıtlı. Giriş yap.');
+      } else if (msg.includes('Email not confirmed')) {
+        setError('Email adresini doğrulaman gerekiyor. Gelen kutunu kontrol et.');
+      } else {
+        setError(msg || 'Bir hata oluştu. Tekrar dene.');
+      }
     } finally {
       setLoading(false);
     }
@@ -56,46 +71,63 @@ const AuthScreen: React.FC = () => {
               <Text style={s.tagline}>Sokak basketbolu{'\n'}yeni bir seviyeye taşındı.</Text>
             </View>
 
-            {/* Form */}
-            <View style={s.form}>
-              {error ? <Text style={s.errorText}>{error}</Text> : null}
+            {/* Email confirmation screen */}
+            {mode === 'confirm' ? (
+              <View style={s.form}>
+                <View style={s.confirmBox}>
+                  <Text style={s.confirmEmoji}>📧</Text>
+                  <Text style={s.confirmTitle}>Email'ini Doğrula</Text>
+                  <Text style={s.confirmText}>
+                    <Text style={s.confirmEmail}>{email}</Text> adresine bir doğrulama linki gönderdik.{'\n\n'}
+                    Linke tıkladıktan sonra giriş yapabilirsin.
+                  </Text>
+                </View>
+                <TouchableOpacity style={s.btn} onPress={() => setMode('signin')} activeOpacity={0.85}>
+                  <Text style={s.btnText}>Giriş Ekranına Dön</Text>
+                </TouchableOpacity>
+              </View>
+            ) : (
+              /* Sign in / Sign up form */
+              <View style={s.form}>
+                {error ? <Text style={s.errorText}>{error}</Text> : null}
 
-              <TextInput
-                style={s.input}
-                placeholder="Email"
-                placeholderTextColor={Colors.textMuted}
-                value={email}
-                onChangeText={setEmail}
-                autoCapitalize="none"
-                keyboardType="email-address"
-              />
-              <TextInput
-                style={s.input}
-                placeholder="Şifre"
-                placeholderTextColor={Colors.textMuted}
-                value={password}
-                onChangeText={setPassword}
-                secureTextEntry
-              />
+                <TextInput
+                  style={s.input}
+                  placeholder="Email"
+                  placeholderTextColor={Colors.textMuted}
+                  value={email}
+                  onChangeText={setEmail}
+                  autoCapitalize="none"
+                  keyboardType="email-address"
+                />
+                <TextInput
+                  style={s.input}
+                  placeholder="Şifre (en az 6 karakter)"
+                  placeholderTextColor={Colors.textMuted}
+                  value={password}
+                  onChangeText={setPassword}
+                  secureTextEntry
+                />
 
-              <TouchableOpacity
-                style={s.btn}
-                onPress={handleAuth}
-                activeOpacity={0.85}
-                disabled={loading}>
-                {loading
-                  ? <ActivityIndicator color="#fff" />
-                  : <Text style={s.btnText}>{mode === 'signin' ? 'Giriş Yap' : 'Hesap Oluştur'}</Text>}
-              </TouchableOpacity>
+                <TouchableOpacity
+                  style={s.btn}
+                  onPress={handleAuth}
+                  activeOpacity={0.85}
+                  disabled={loading}>
+                  {loading
+                    ? <ActivityIndicator color="#fff" />
+                    : <Text style={s.btnText}>{mode === 'signin' ? 'Giriş Yap' : 'Hesap Oluştur'}</Text>}
+                </TouchableOpacity>
 
-              <TouchableOpacity onPress={() => setMode(m => m === 'signin' ? 'signup' : 'signin')}>
-                <Text style={s.switchText}>
-                  {mode === 'signin'
-                    ? 'Hesabın yok mu? Kayıt ol'
-                    : 'Zaten hesabın var mı? Giriş yap'}
-                </Text>
-              </TouchableOpacity>
-            </View>
+                <TouchableOpacity onPress={() => { setMode(m => m === 'signin' ? 'signup' : 'signin'); setError(''); }}>
+                  <Text style={s.switchText}>
+                    {mode === 'signin'
+                      ? 'Hesabın yok mu? Kayıt ol'
+                      : 'Zaten hesabın var mı? Giriş yap'}
+                  </Text>
+                </TouchableOpacity>
+              </View>
+            )}
 
           </ScrollView>
         </KeyboardAvoidingView>
@@ -160,6 +192,32 @@ const s = StyleSheet.create({
     fontSize: Typography.sm,
     textAlign: 'center',
     marginTop: Spacing.sm,
+  },
+  confirmBox: {
+    backgroundColor: Colors.surface,
+    borderRadius: Radii.xl,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    padding: Spacing.xl,
+    alignItems: 'center',
+    gap: Spacing.md,
+  },
+  confirmEmoji: {fontSize: 48},
+  confirmTitle: {
+    fontSize: Typography.xl,
+    fontWeight: Typography.black,
+    color: Colors.textPrimary,
+    textAlign: 'center',
+  },
+  confirmText: {
+    fontSize: Typography.sm,
+    color: Colors.textSecondary,
+    textAlign: 'center',
+    lineHeight: 22,
+  },
+  confirmEmail: {
+    color: Colors.primary,
+    fontWeight: Typography.bold,
   },
 });
 
