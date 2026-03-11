@@ -1,41 +1,103 @@
-import React, {useState} from 'react';
+import React, {useState, useEffect} from 'react';
 import {
   View, Text, StyleSheet, TextInput, TouchableOpacity,
-  ScrollView, ActivityIndicator,
+  ScrollView, ActivityIndicator, Alert,
 } from 'react-native';
 import {SafeAreaView} from 'react-native-safe-area-context';
-import {Colors, Typography, Spacing, Radii} from '../../constants/theme';
+import {useNavigation} from '@react-navigation/native';
+import type {NativeStackNavigationProp} from '@react-navigation/native-stack';
+import {Colors, Typography, Spacing, Radii, Shadows} from '../../constants/theme';
+import type {TeamsStackParamList} from '../../navigation/AppNavigator';
+import type {City} from '../../types/models';
+import {createTeam} from '../../services/supabase/teamsService';
+import {getMyProfile} from '../../services/supabase/profilesService';
 
-const TEAM_COLORS = ['#f97316', '#3b82f6', '#22c55e', '#a855f7', '#ef4444', '#fbbf24'];
+type NavProp = NativeStackNavigationProp<TeamsStackParamList, 'CreateTeam'>;
+
+const TEAM_COLORS = [
+  {hex: '#f97316', label: 'Turuncu'},
+  {hex: '#3b82f6', label: 'Mavi'},
+  {hex: '#22c55e', label: 'Yeşil'},
+  {hex: '#a855f7', label: 'Mor'},
+  {hex: '#ef4444', label: 'Kırmızı'},
+  {hex: '#fbbf24', label: 'Altın'},
+];
+
+const CITY_LABELS: Record<City, string> = {
+  istanbul: 'İstanbul',
+  ankara: 'Ankara',
+  izmir: 'İzmir',
+};
 
 const CreateTeamScreen: React.FC = () => {
+  const navigation = useNavigation<NavProp>();
   const [teamName, setTeamName] = useState('');
-  const [selectedColor, setSelectedColor] = useState(TEAM_COLORS[0]);
+  const [selectedColor, setSelectedColor] = useState(TEAM_COLORS[0].hex);
+  const [myCity, setMyCity] = useState<City | null>(null);
   const [loading, setLoading] = useState(false);
+  const [initLoading, setInitLoading] = useState(true);
+
+  useEffect(() => {
+    getMyProfile().then(profile => {
+      if (profile) {
+        setMyCity(profile.city);
+      }
+      setInitLoading(false);
+    });
+  }, []);
 
   const handleCreate = async () => {
-    if (!teamName.trim()) return;
+    const name = teamName.trim();
+    if (!name || !myCity) {return;}
+
+    if (name.length < 3) {
+      Alert.alert('Hata', 'Takım adı en az 3 karakter olmalı.');
+      return;
+    }
+
     setLoading(true);
-    // TODO: save to Supabase
-    setLoading(false);
+    try {
+      await createTeam(name, myCity, selectedColor);
+      navigation.goBack();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Takım oluşturulamadı.';
+      Alert.alert('Hata', msg);
+    } finally {
+      setLoading(false);
+    }
   };
+
+  if (initLoading) {
+    return (
+      <View style={s.screen}>
+        <View style={s.center}>
+          <ActivityIndicator color={Colors.primary} size="large" />
+        </View>
+      </View>
+    );
+  }
+
+  const initial = teamName.trim().charAt(0).toUpperCase() || '?';
 
   return (
     <View style={s.screen}>
       <SafeAreaView style={s.safe} edges={['bottom']}>
-        <ScrollView contentContainerStyle={s.scroll} keyboardShouldPersistTaps="handled">
+        <ScrollView
+          contentContainerStyle={s.scroll}
+          keyboardShouldPersistTaps="handled"
+          showsVerticalScrollIndicator={false}>
 
-          {/* Team logo preview */}
-          <View style={s.logoPreview}>
-            <View style={[s.logo, {backgroundColor: selectedColor}]}>
-              <Text style={s.logoText}>{teamName.charAt(0).toUpperCase() || '?'}</Text>
+          {/* Logo preview */}
+          <View style={s.logoSection}>
+            <View style={[s.logo, {backgroundColor: selectedColor, ...Shadows.glow}]}>
+              <Text style={s.logoInitial}>{initial}</Text>
             </View>
-            <Text style={s.previewLabel}>Takım Logosu Önizleme</Text>
+            <Text style={s.logoCaption}>Takım Logosu</Text>
           </View>
 
-          {/* Name */}
+          {/* Team name */}
           <View style={s.field}>
-            <Text style={s.label}>TAKIM ADI</Text>
+            <Text style={s.fieldLabel}>TAKIM ADI</Text>
             <TextInput
               style={s.input}
               placeholder="örn. Boğaziçi Ballers"
@@ -43,39 +105,54 @@ const CreateTeamScreen: React.FC = () => {
               value={teamName}
               onChangeText={setTeamName}
               maxLength={24}
+              autoCapitalize="words"
             />
+            <Text style={s.fieldHint}>{teamName.length}/24</Text>
           </View>
 
           {/* Color picker */}
           <View style={s.field}>
-            <Text style={s.label}>RENK</Text>
+            <Text style={s.fieldLabel}>TAKIM RENGİ</Text>
             <View style={s.colorRow}>
               {TEAM_COLORS.map(c => (
                 <TouchableOpacity
-                  key={c}
-                  style={[s.colorDot, {backgroundColor: c}, selectedColor === c && s.colorDotActive]}
-                  onPress={() => setSelectedColor(c)}
+                  key={c.hex}
+                  style={[
+                    s.colorDot,
+                    {backgroundColor: c.hex},
+                    selectedColor === c.hex && s.colorDotActive,
+                  ]}
+                  onPress={() => setSelectedColor(c.hex)}
                   activeOpacity={0.8}
                 />
               ))}
             </View>
           </View>
 
+          {/* City info */}
+          {myCity && (
+            <View style={s.cityBox}>
+              <Text style={s.cityLabel}>📍 Şehir</Text>
+              <Text style={s.cityValue}>{CITY_LABELS[myCity]}</Text>
+              <Text style={s.cityNote}>Takımın profil şehrine göre oluşturulur.</Text>
+            </View>
+          )}
+
           {/* Info */}
           <View style={s.infoBox}>
             <Text style={s.infoText}>
-              🏀 Takımını oluşturduktan sonra 3 oyuncuyu daha davet edebilirsin. Kaptan olarak sen atanırsın.
+              🏀 Kaptan olarak sen atanırsın. Takımı oluşturduktan sonra profili olmayan oyuncuları kullanıcı adıyla arayarak davet edebilirsin.
             </Text>
           </View>
 
           <TouchableOpacity
-            style={[s.btn, !teamName.trim() && s.btnDisabled]}
+            style={[s.btn, (!teamName.trim() || loading) && s.btnDisabled]}
             onPress={handleCreate}
             disabled={!teamName.trim() || loading}
             activeOpacity={0.85}>
             {loading
               ? <ActivityIndicator color="#fff" />
-              : <Text style={s.btnText}>Takımı Oluştur</Text>}
+              : <Text style={s.btnText}>Takımı Oluştur 🏀</Text>}
           </TouchableOpacity>
 
         </ScrollView>
@@ -87,42 +164,57 @@ const CreateTeamScreen: React.FC = () => {
 const s = StyleSheet.create({
   screen: {flex: 1, backgroundColor: Colors.background},
   safe: {flex: 1},
-  scroll: {padding: Spacing.lg, gap: Spacing.xl},
-  logoPreview: {alignItems: 'center', gap: 8, paddingVertical: Spacing.md},
+  center: {flex: 1, alignItems: 'center', justifyContent: 'center'},
+  scroll: {padding: Spacing.lg, gap: Spacing.xl, paddingBottom: Spacing.xxxl},
+
+  // Logo
+  logoSection: {alignItems: 'center', gap: Spacing.sm, paddingVertical: Spacing.lg},
   logo: {
-    width: 88, height: 88, borderRadius: 44,
+    width: 100, height: 100, borderRadius: 50,
     alignItems: 'center', justifyContent: 'center',
   },
-  logoText: {fontSize: 40, fontWeight: Typography.black, color: '#fff'},
-  previewLabel: {fontSize: Typography.xs, color: Colors.textMuted},
+  logoInitial: {fontSize: 46, fontWeight: Typography.black, color: '#fff'},
+  logoCaption: {fontSize: Typography.xs, color: Colors.textMuted},
+
+  // Field
   field: {gap: Spacing.sm},
-  label: {fontSize: Typography.xs, fontWeight: Typography.bold, color: Colors.textMuted, letterSpacing: 1.2},
+  fieldLabel: {fontSize: Typography.xs, fontWeight: Typography.bold, color: Colors.textMuted, letterSpacing: 1.2},
+  fieldHint: {fontSize: Typography.xs, color: Colors.textMuted, textAlign: 'right', marginTop: -Spacing.xs},
   input: {
     backgroundColor: Colors.surface,
     borderRadius: Radii.lg,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    paddingHorizontal: Spacing.lg,
-    paddingVertical: 14,
-    color: Colors.textPrimary,
-    fontSize: Typography.base,
+    borderWidth: 1, borderColor: Colors.border,
+    paddingHorizontal: Spacing.lg, paddingVertical: 14,
+    color: Colors.textPrimary, fontSize: Typography.base,
   },
+
+  // Color
   colorRow: {flexDirection: 'row', gap: Spacing.md, flexWrap: 'wrap'},
-  colorDot: {width: 38, height: 38, borderRadius: 19},
+  colorDot: {width: 42, height: 42, borderRadius: 21},
   colorDotActive: {borderWidth: 3, borderColor: '#fff'},
-  infoBox: {
-    backgroundColor: Colors.primarySubtle,
+
+  // City
+  cityBox: {
+    backgroundColor: Colors.surface,
     borderRadius: Radii.lg,
-    borderWidth: 1,
-    borderColor: Colors.primaryGlow,
-    padding: Spacing.md,
+    borderWidth: 1, borderColor: Colors.border,
+    padding: Spacing.lg, gap: 4,
+  },
+  cityLabel: {fontSize: Typography.xs, fontWeight: Typography.bold, color: Colors.textMuted, letterSpacing: 1},
+  cityValue: {fontSize: Typography.lg, fontWeight: Typography.heavy, color: Colors.textPrimary},
+  cityNote: {fontSize: Typography.xs, color: Colors.textMuted, marginTop: 2},
+
+  // Info
+  infoBox: {
+    backgroundColor: Colors.primarySubtle, borderRadius: Radii.lg,
+    borderWidth: 1, borderColor: Colors.primaryGlow, padding: Spacing.md,
   },
   infoText: {fontSize: Typography.sm, color: Colors.textSecondary, lineHeight: 20},
+
+  // Button
   btn: {
-    backgroundColor: Colors.primary,
-    borderRadius: Radii.lg,
-    paddingVertical: 15,
-    alignItems: 'center',
+    backgroundColor: Colors.primary, borderRadius: Radii.lg,
+    paddingVertical: 15, alignItems: 'center', ...Shadows.glow,
   },
   btnDisabled: {opacity: 0.4},
   btnText: {color: '#fff', fontSize: Typography.base, fontWeight: Typography.bold},

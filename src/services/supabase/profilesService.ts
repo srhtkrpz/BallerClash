@@ -97,6 +97,25 @@ export async function createProfile(data: {
   return rowToProfile(row);
 }
 
+export async function searchUsersByUsername(query: string): Promise<Profile[]> {
+  if (!query.trim()) {
+    return [];
+  }
+
+  const {data, error} = await supabase
+    .from('profiles')
+    .select('*')
+    .ilike('username', `%${query.trim()}%`)
+    .is('team_id', null) // only users without a team
+    .limit(10);
+
+  if (error || !data) {
+    return [];
+  }
+
+  return data.map(rowToProfile);
+}
+
 export async function updateProfile(
   updates: Partial<{
     username: string;
