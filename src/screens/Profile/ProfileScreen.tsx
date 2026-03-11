@@ -13,7 +13,7 @@ import {getMyProfile} from '../../services/supabase/profilesService';
 import type {Profile} from '../../types/models';
 import type {RootStackParamList} from '../../navigation/AppNavigator';
 
-type NavProp = NativeStackNavigationProp<RootStackParamList>;
+type NavProp = NativeStackNavigationProp<RootStackParamList, 'Main'>;
 
 const StatBox = ({label, value, color}: {label: string; value: string | number; color?: string}) => (
   <View style={ps.statBox}>
@@ -76,7 +76,10 @@ const ProfileScreen: React.FC = () => {
             </View>
             <Text style={ps.username}>{profile?.username ?? 'Kullanıcı'}</Text>
             <Text style={ps.email}>{user?.email}</Text>
-            <TouchableOpacity style={ps.editBtn} activeOpacity={0.8}>
+            <TouchableOpacity
+              style={ps.editBtn}
+              activeOpacity={0.8}
+              onPress={() => navigation.navigate('AvatarEditor')}>
               <Text style={ps.editBtnText}>Avatar Düzenle</Text>
             </TouchableOpacity>
           </View>

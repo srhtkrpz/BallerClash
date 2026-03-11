@@ -27,6 +27,7 @@ export type RootStackParamList = {
   Auth: undefined;
   Onboarding: undefined;
   Main: undefined;
+  AvatarEditor: undefined;
 };
 
 export type HomeStackParamList = {
@@ -165,6 +166,16 @@ const RootNavigator: React.FC = () => {
   return (
     <Root.Navigator screenOptions={{headerShown: false}}>
       <Root.Screen name="Main" component={MainTabNavigator} />
+      <Root.Screen
+        name="Onboarding"
+        component={OnboardingScreen}
+        options={{headerShown: false}}
+      />
+      <Root.Screen
+        name="AvatarEditor"
+        component={AvatarEditorScreen}
+        options={{...stackOptions, headerShown: true, title: 'Avatar Düzenle'}}
+      />
     </Root.Navigator>
   );
 };
