@@ -48,10 +48,19 @@ const CreateTeamScreen: React.FC = () => {
 
   const handleCreate = async () => {
     const name = teamName.trim();
-    if (!name || !myCity) {return;}
+    if (!name) {return;}
 
     if (name.length < 3) {
       Alert.alert('Hata', 'Takım adı en az 3 karakter olmalı.');
+      return;
+    }
+
+    if (!myCity) {
+      Alert.alert(
+        'Profil Eksik',
+        'Takım oluşturmak için önce profilini tamamlaman gerekiyor.',
+        [{text: 'Tamam', onPress: () => navigation.goBack()}],
+      );
       return;
     }
 
@@ -59,9 +68,13 @@ const CreateTeamScreen: React.FC = () => {
     try {
       await createTeam(name, myCity, selectedColor);
       navigation.goBack();
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Takım oluşturulamadı.';
-      Alert.alert('Hata', msg);
+    } catch (err: any) {
+      const msg: string = err?.message ?? 'Takım oluşturulamadı.';
+      if (msg.includes('duplicate') || msg.includes('unique')) {
+        Alert.alert('Hata', 'Bu isimde bir takım zaten var. Farklı bir isim dene.');
+      } else {
+        Alert.alert('Hata', msg);
+      }
     } finally {
       setLoading(false);
     }
@@ -141,7 +154,7 @@ const CreateTeamScreen: React.FC = () => {
           {/* Info */}
           <View style={s.infoBox}>
             <Text style={s.infoText}>
-              🏀 Kaptan olarak sen atanırsın. Takımı oluşturduktan sonra profili olmayan oyuncuları kullanıcı adıyla arayarak davet edebilirsin.
+              Kaptan olarak sen atanırsın. Takımı oluşturduktan sonra oyuncuları kullanıcı adıyla arayarak davet edebilirsin.
             </Text>
           </View>
 
@@ -152,7 +165,7 @@ const CreateTeamScreen: React.FC = () => {
             activeOpacity={0.85}>
             {loading
               ? <ActivityIndicator color="#fff" />
-              : <Text style={s.btnText}>Takımı Oluştur 🏀</Text>}
+              : <Text style={s.btnText}>Takımı Oluştur</Text>}
           </TouchableOpacity>
 
         </ScrollView>
