@@ -1,7 +1,13 @@
 import React, {useState, useCallback} from 'react';
 import {
-  View, Text, StyleSheet, FlatList, TouchableOpacity,
-  ActivityIndicator, RefreshControl, Alert,
+  View,
+  Text,
+  StyleSheet,
+  FlatList,
+  TouchableOpacity,
+  ActivityIndicator,
+  RefreshControl,
+  Alert,
 } from 'react-native';
 import {SafeAreaView} from 'react-native-safe-area-context';
 import {useFocusEffect, useNavigation} from '@react-navigation/native';
@@ -9,7 +15,13 @@ import type {NativeStackNavigationProp} from '@react-navigation/native-stack';
 import {Colors, Typography, Spacing, Radii, Shadows} from '../../constants/theme';
 import type {Match, City} from '../../types/models';
 import type {HomeStackParamList} from '../../navigation/AppNavigator';
-import {getOpenMatches} from '../../services/supabase/matchesService';
+import {
+  getOpenMatches,
+  getMyMatches,
+  confirmMatch,
+  cancelChallenge,
+} from '../../services/supabase/matchesService';
+import {getMyTeam} from '../../services/supabase/teamsService';
 
 type NavProp = NativeStackNavigationProp<HomeStackParamList, 'HomeMain'>;
 
@@ -34,6 +46,8 @@ const STATUS_LABEL: Record<string, string> = {
   completed: 'Tamamlandı',
 };
 
+// ── MatchCard ────────────────────────────────────────────────────────────────
+
 const MatchCard = ({match, onPress}: {match: Match; onPress: () => void}) => {
   const date = new Date(match.scheduledAt).toLocaleDateString('tr-TR', {
     weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit',
@@ -41,7 +55,6 @@ const MatchCard = ({match, onPress}: {match: Match; onPress: () => void}) => {
 
   return (
     <TouchableOpacity style={s.card} onPress={onPress} activeOpacity={0.8}>
-      {/* Status badge */}
       <View style={[s.badge, {backgroundColor: `${STATUS_COLOR[match.status]}20`}]}>
         <View style={[s.badgeDot, {backgroundColor: STATUS_COLOR[match.status]}]} />
         <Text style={[s.badgeText, {color: STATUS_COLOR[match.status]}]}>
@@ -49,7 +62,6 @@ const MatchCard = ({match, onPress}: {match: Match; onPress: () => void}) => {
         </Text>
       </View>
 
-      {/* Teams row */}
       <View style={s.teamsRow}>
         <View style={s.teamSide}>
           <Text style={s.teamName} numberOfLines={1}>{match.challengerTeamName}</Text>
@@ -66,7 +78,6 @@ const MatchCard = ({match, onPress}: {match: Match; onPress: () => void}) => {
         </View>
       </View>
 
-      {/* Info */}
       <View style={s.cardFooter}>
         <Text style={s.courtName}>📍 {match.courtName}</Text>
         <Text style={s.matchDate}>{date}</Text>
@@ -75,30 +86,147 @@ const MatchCard = ({match, onPress}: {match: Match; onPress: () => void}) => {
   );
 };
 
+// ── PendingCard ──────────────────────────────────────────────────────────────
+
+const PendingCard = ({
+  match,
+  myTeamId,
+  onAccept,
+  onReject,
+  onPress,
+}: {
+  match: Match;
+  myTeamId: string;
+  onAccept: () => void;
+  onReject: () => void;
+  onPress: () => void;
+}) => {
+  const date = new Date(match.scheduledAt).toLocaleDateString('tr-TR', {
+    weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit',
+  });
+
+  const isMine = match.challengerTeamId === myTeamId;
+  const challengerName = isMine ? (match.opponentTeamName ?? '?') : match.challengerTeamName;
+  const challengeLabel = isMine ? 'Gelen Meydan Okuma' : 'Maçım için meydan okuma bekleniyor';
+
+  return (
+    <TouchableOpacity style={s.pendingCard} onPress={onPress} activeOpacity={0.85}>
+      <View style={s.pendingTop}>
+        <View style={[s.badge, {backgroundColor: `${Colors.warning}20`}]}>
+          <View style={[s.badgeDot, {backgroundColor: Colors.warning}]} />
+          <Text style={[s.badgeText, {color: Colors.warning}]}>Yanıt Bekleniyor</Text>
+        </View>
+      </View>
+
+      {isMine ? (
+        <Text style={s.pendingChallenger}>
+          <Text style={s.pendingBold}>{challengerName}</Text>
+          {' '}sana meydan okudu
+        </Text>
+      ) : (
+        <Text style={s.pendingChallenger}>{challengeLabel}</Text>
+      )}
+
+      <View style={s.cardFooter}>
+        <Text style={s.courtName}>📍 {match.courtName}</Text>
+        <Text style={s.matchDate}>{date}</Text>
+      </View>
+
+      {isMine && (
+        <View style={s.pendingActions}>
+          <TouchableOpacity style={s.rejectBtn} onPress={onReject} activeOpacity={0.8}>
+            <Text style={s.rejectBtnText}>Reddet</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={s.acceptBtn} onPress={onAccept} activeOpacity={0.8}>
+            <Text style={s.acceptBtnText}>Kabul Et 🤝</Text>
+          </TouchableOpacity>
+        </View>
+      )}
+    </TouchableOpacity>
+  );
+};
+
+// ── HomeScreen ───────────────────────────────────────────────────────────────
+
 const HomeScreen: React.FC = () => {
   const navigation = useNavigation<NavProp>();
+
+  const [activeTab, setActiveTab] = useState<'matches' | 'invitations'>('matches');
   const [matches, setMatches] = useState<Match[]>([]);
+  const [myMatches, setMyMatches] = useState<Match[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [cityFilter, setCityFilter] = useState<City | 'all'>('all');
+  const [myTeamId, setMyTeamId] = useState<string>('');
 
-  const loadMatches = useCallback(async () => {
+  const loadData = useCallback(async () => {
     const city = cityFilter === 'all' ? undefined : cityFilter;
-    const data = await getOpenMatches(city);
-    setMatches(data);
+    const [open, mine, team] = await Promise.all([
+      getOpenMatches(city),
+      getMyMatches(),
+      getMyTeam(),
+    ]);
+    setMatches(open);
+    setMyMatches(mine);
+    setMyTeamId(team?.id ?? '');
     setLoading(false);
     setRefreshing(false);
   }, [cityFilter]);
 
   useFocusEffect(useCallback(() => {
     setLoading(true);
-    loadMatches();
-  }, [loadMatches]));
+    loadData();
+  }, [loadData]));
 
   const handleCityFilter = (key: City | 'all') => {
     setCityFilter(key);
     setLoading(true);
   };
+
+  const handleAccept = async (matchId: string) => {
+    try {
+      await confirmMatch(matchId);
+      loadData();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Hata oluştu';
+      Alert.alert('Hata', msg);
+    }
+  };
+
+  const handleReject = async (matchId: string) => {
+    Alert.alert(
+      'Meydan Okumayı Reddet',
+      'Bu meydan okumayı reddetmek istediğine emin misin?',
+      [
+        {text: 'Vazgeç', style: 'cancel'},
+        {
+          text: 'Reddet',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              await cancelChallenge(matchId);
+              loadData();
+            } catch (err) {
+              const msg = err instanceof Error ? err.message : 'Hata oluştu';
+              Alert.alert('Hata', msg);
+            }
+          },
+        },
+      ],
+    );
+  };
+
+  // For the Davetler tab: pending matches where my team is challenger (I received a challenge)
+  // and all my open matches waiting for challengers
+  const pendingIncoming = myMatches.filter(
+    m => m.status === 'pending' && m.challengerTeamId === myTeamId,
+  );
+  const myOpenMatches = myMatches.filter(
+    m => m.status === 'open' && m.challengerTeamId === myTeamId,
+  );
+  const pendingOutgoing = myMatches.filter(
+    m => m.status === 'pending' && m.opponentTeamId === myTeamId,
+  );
 
   const filtered = cityFilter === 'all' ? matches : matches.filter(m => m.city === cityFilter);
 
@@ -111,55 +239,140 @@ const HomeScreen: React.FC = () => {
           <TouchableOpacity
             style={s.createBtn}
             activeOpacity={0.8}
-            onPress={() => Alert.alert('Yakında', 'Maç oluşturma özelliği yakında geliyor!')}>
+            onPress={() => navigation.navigate('CreateMatch')}>
             <Text style={s.createBtnText}>+ Maç Oluştur</Text>
           </TouchableOpacity>
         </View>
 
-        {/* City filter */}
-        <View style={s.filterRow}>
-          {CITY_FILTERS.map(f => (
-            <TouchableOpacity
-              key={f.key}
-              style={[s.filterChip, cityFilter === f.key && s.filterChipActive]}
-              onPress={() => handleCityFilter(f.key)}
-              activeOpacity={0.8}>
-              <Text style={[s.filterText, cityFilter === f.key && s.filterTextActive]}>{f.label}</Text>
-            </TouchableOpacity>
-          ))}
+        {/* Tabs */}
+        <View style={s.tabRow}>
+          <TouchableOpacity
+            style={[s.tab, activeTab === 'matches' && s.tabActive]}
+            onPress={() => setActiveTab('matches')}
+            activeOpacity={0.8}>
+            <Text style={[s.tabText, activeTab === 'matches' && s.tabTextActive]}>Maçlar</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[s.tab, activeTab === 'invitations' && s.tabActive]}
+            onPress={() => setActiveTab('invitations')}
+            activeOpacity={0.8}>
+            <Text style={[s.tabText, activeTab === 'invitations' && s.tabTextActive]}>Davetler</Text>
+            {(pendingIncoming.length + pendingOutgoing.length) > 0 && (
+              <View style={s.tabBadge}>
+                <Text style={s.tabBadgeText}>{pendingIncoming.length + pendingOutgoing.length}</Text>
+              </View>
+            )}
+          </TouchableOpacity>
         </View>
 
-        {/* List */}
-        {loading ? (
-          <View style={s.center}>
-            <ActivityIndicator color={Colors.primary} size="large" />
-          </View>
-        ) : filtered.length === 0 ? (
-          <View style={s.center}>
-            <Text style={s.emptyIcon}>🏀</Text>
-            <Text style={s.emptyTitle}>Henüz maç yok</Text>
-            <Text style={s.emptySub}>İlk maçı oluştur ve sahaya çık!</Text>
-          </View>
-        ) : (
-          <FlatList
-            data={filtered}
-            keyExtractor={m => m.id}
-            contentContainerStyle={s.list}
-            showsVerticalScrollIndicator={false}
-            refreshControl={
-              <RefreshControl
-                refreshing={refreshing}
-                onRefresh={() => {setRefreshing(true); loadMatches();}}
-                tintColor={Colors.primary}
-              />
-            }
-            renderItem={({item}) => (
-              <MatchCard
-                match={item}
-                onPress={() => navigation.navigate('MatchDetail', {matchId: item.id})}
+        {/* Matches Tab */}
+        {activeTab === 'matches' && (
+          <>
+            <View style={s.filterRow}>
+              {CITY_FILTERS.map(f => (
+                <TouchableOpacity
+                  key={f.key}
+                  style={[s.filterChip, cityFilter === f.key && s.filterChipActive]}
+                  onPress={() => handleCityFilter(f.key)}
+                  activeOpacity={0.8}>
+                  <Text style={[s.filterText, cityFilter === f.key && s.filterTextActive]}>{f.label}</Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+
+            {loading ? (
+              <View style={s.center}>
+                <ActivityIndicator color={Colors.primary} size="large" />
+              </View>
+            ) : filtered.length === 0 ? (
+              <View style={s.center}>
+                <Text style={s.emptyIcon}>🏀</Text>
+                <Text style={s.emptyTitle}>Henüz maç yok</Text>
+                <Text style={s.emptySub}>İlk maçı oluştur ve sahaya çık!</Text>
+              </View>
+            ) : (
+              <FlatList
+                data={filtered}
+                keyExtractor={m => m.id}
+                contentContainerStyle={s.list}
+                showsVerticalScrollIndicator={false}
+                refreshControl={
+                  <RefreshControl
+                    refreshing={refreshing}
+                    onRefresh={() => {setRefreshing(true); loadData();}}
+                    tintColor={Colors.primary}
+                  />
+                }
+                renderItem={({item}) => (
+                  <MatchCard
+                    match={item}
+                    onPress={() => navigation.navigate('MatchDetail', {matchId: item.id})}
+                  />
+                )}
               />
             )}
-          />
+          </>
+        )}
+
+        {/* Invitations Tab */}
+        {activeTab === 'invitations' && (
+          <>
+            {loading ? (
+              <View style={s.center}>
+                <ActivityIndicator color={Colors.primary} size="large" />
+              </View>
+            ) : (
+              <FlatList
+                data={[
+                  {type: 'section', label: 'Gelen Meydan Okumalar', key: 'sec-incoming'},
+                  ...pendingIncoming.map(m => ({type: 'pending', match: m, key: m.id})),
+                  pendingIncoming.length === 0
+                    ? {type: 'empty', label: 'Bekleyen meydan okuma yok', key: 'empty-incoming'}
+                    : null,
+                  {type: 'section', label: 'Maçlarım', key: 'sec-mine'},
+                  ...myOpenMatches.map(m => ({type: 'myopen', match: m, key: `myopen-${m.id}`})),
+                  ...pendingOutgoing.map(m => ({type: 'mypending', match: m, key: `mypending-${m.id}`})),
+                  (myOpenMatches.length + pendingOutgoing.length) === 0
+                    ? {type: 'empty', label: 'Henüz maç oluşturmadın', key: 'empty-mine'}
+                    : null,
+                ].filter(Boolean) as Array<{type: string; label?: string; match?: Match; key: string}>}
+                keyExtractor={item => item.key}
+                contentContainerStyle={s.list}
+                showsVerticalScrollIndicator={false}
+                refreshControl={
+                  <RefreshControl
+                    refreshing={refreshing}
+                    onRefresh={() => {setRefreshing(true); loadData();}}
+                    tintColor={Colors.primary}
+                  />
+                }
+                renderItem={({item}) => {
+                  if (item.type === 'section') {
+                    return <Text style={s.sectionHeader}>{item.label}</Text>;
+                  }
+                  if (item.type === 'empty') {
+                    return (
+                      <View style={s.inlineEmpty}>
+                        <Text style={s.inlineEmptyText}>{item.label}</Text>
+                      </View>
+                    );
+                  }
+                  if ((item.type === 'pending' || item.type === 'myopen' || item.type === 'mypending') && item.match) {
+                    return (
+                      <PendingCard
+                        match={item.match}
+                        myTeamId={myTeamId}
+                        onAccept={() => handleAccept(item.match!.id)}
+                        onReject={() => handleReject(item.match!.id)}
+                        onPress={() => navigation.navigate('MatchDetail', {matchId: item.match!.id})}
+                      />
+                    );
+                  }
+                  return null;
+                }}
+              />
+            )}
+          </>
         )}
       </SafeAreaView>
     </View>
@@ -185,6 +398,41 @@ const s = StyleSheet.create({
     borderRadius: Radii.full,
   },
   createBtnText: {color: '#fff', fontSize: Typography.sm, fontWeight: Typography.bold},
+
+  // Tabs
+  tabRow: {
+    flexDirection: 'row',
+    paddingHorizontal: Spacing.lg,
+    gap: Spacing.sm,
+    marginBottom: Spacing.sm,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.divider,
+  },
+  tab: {
+    paddingVertical: Spacing.sm,
+    paddingHorizontal: Spacing.md,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    borderBottomWidth: 2,
+    borderBottomColor: 'transparent',
+    marginBottom: -1,
+  },
+  tabActive: {borderBottomColor: Colors.primary},
+  tabText: {fontSize: Typography.base, fontWeight: Typography.semibold, color: Colors.textMuted},
+  tabTextActive: {color: Colors.primary},
+  tabBadge: {
+    backgroundColor: Colors.primary,
+    borderRadius: Radii.full,
+    minWidth: 18,
+    height: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 4,
+  },
+  tabBadgeText: {color: '#fff', fontSize: 10, fontWeight: Typography.bold},
+
+  // Filter
   filterRow: {
     flexDirection: 'row',
     paddingHorizontal: Spacing.lg,
@@ -202,11 +450,32 @@ const s = StyleSheet.create({
   filterChipActive: {backgroundColor: Colors.primarySubtle, borderColor: Colors.primary},
   filterText: {fontSize: Typography.sm, fontWeight: Typography.semibold, color: Colors.textMuted},
   filterTextActive: {color: Colors.primary},
+
   list: {paddingHorizontal: Spacing.lg, paddingBottom: Spacing.xxxl, gap: Spacing.md},
   center: {flex: 1, alignItems: 'center', justifyContent: 'center', gap: 12, paddingHorizontal: Spacing.xl},
   emptyIcon: {fontSize: 48},
   emptyTitle: {fontSize: Typography.lg, fontWeight: Typography.bold, color: Colors.textPrimary},
   emptySub: {fontSize: Typography.sm, color: Colors.textMuted, textAlign: 'center'},
+
+  // Section header
+  sectionHeader: {
+    fontSize: Typography.sm,
+    fontWeight: Typography.bold,
+    color: Colors.textMuted,
+    textTransform: 'uppercase',
+    letterSpacing: 0.8,
+    marginTop: Spacing.md,
+    marginBottom: Spacing.xs,
+  },
+  inlineEmpty: {
+    backgroundColor: Colors.surface,
+    borderRadius: Radii.lg,
+    padding: Spacing.lg,
+    alignItems: 'center',
+  },
+  inlineEmptyText: {fontSize: Typography.sm, color: Colors.textMuted},
+
+  // MatchCard
   card: {
     backgroundColor: Colors.surfaceElevated,
     borderRadius: Radii.xl,
@@ -248,6 +517,38 @@ const s = StyleSheet.create({
   },
   courtName: {fontSize: Typography.xs, color: Colors.textMuted},
   matchDate: {fontSize: Typography.xs, color: Colors.textMuted},
+
+  // PendingCard
+  pendingCard: {
+    backgroundColor: Colors.surfaceElevated,
+    borderRadius: Radii.xl,
+    borderWidth: 1,
+    borderColor: `${Colors.warning}40`,
+    padding: Spacing.lg,
+    gap: Spacing.md,
+    ...Shadows.card,
+  },
+  pendingTop: {flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center'},
+  pendingChallenger: {fontSize: Typography.base, color: Colors.textSecondary},
+  pendingBold: {fontWeight: Typography.bold, color: Colors.textPrimary},
+  pendingActions: {flexDirection: 'row', gap: Spacing.sm},
+  rejectBtn: {
+    flex: 1,
+    paddingVertical: Spacing.sm,
+    borderRadius: Radii.lg,
+    borderWidth: 1,
+    borderColor: Colors.borderStrong,
+    alignItems: 'center',
+  },
+  rejectBtnText: {color: Colors.textSecondary, fontSize: Typography.sm, fontWeight: Typography.semibold},
+  acceptBtn: {
+    flex: 2,
+    paddingVertical: Spacing.sm,
+    borderRadius: Radii.lg,
+    backgroundColor: Colors.accentGreen,
+    alignItems: 'center',
+  },
+  acceptBtnText: {color: '#fff', fontSize: Typography.sm, fontWeight: Typography.bold},
 });
 
 export default HomeScreen;

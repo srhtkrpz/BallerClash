@@ -17,6 +17,7 @@ import CreateTeamScreen from '../screens/Teams/CreateTeamScreen';
 import MatchScreen from '../screens/Match/MatchScreen';
 import MatchDetailScreen from '../screens/Match/MatchDetailScreen';
 import PostMatchScreen from '../screens/Match/PostMatchScreen';
+import CreateMatchScreen from '../screens/Match/CreateMatchScreen';
 import LeaderboardScreen from '../screens/Leaderboard/LeaderboardScreen';
 import MapScreen from '../screens/Map/MapScreen';
 
@@ -30,6 +31,7 @@ export type RootStackParamList = {
 
 export type HomeStackParamList = {
   HomeMain: undefined;
+  CreateMatch: undefined;
   MatchDetail: {matchId: string};
   PostMatch: {matchId: string};
   AvatarEditor: undefined;
@@ -72,6 +74,7 @@ function HomeStackNavigator() {
   return (
     <HomeStack.Navigator screenOptions={stackOptions}>
       <HomeStack.Screen name="HomeMain" component={HomeScreen} options={{headerShown: false}} />
+      <HomeStack.Screen name="CreateMatch" component={CreateMatchScreen} options={{headerShown: false}} />
       <HomeStack.Screen name="MatchDetail" component={MatchDetailScreen} options={{title: 'Maç Detayı'}} />
       <HomeStack.Screen name="PostMatch" component={PostMatchScreen} options={{title: 'Maç Sonu', headerShown: false}} />
       <HomeStack.Screen name="AvatarEditor" component={AvatarEditorScreen} options={{title: 'Avatar Düzenle'}} />

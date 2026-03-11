@@ -155,6 +155,22 @@ export async function completeMatch(
   }
 }
 
+export async function cancelChallenge(matchId: string): Promise<void> {
+  const session = await getSession();
+  if (!session) {
+    throw new Error('Not authenticated');
+  }
+
+  const {error} = await supabase
+    .from('matches')
+    .update({status: 'open', opponent_team_id: null, opponent_team_name: null})
+    .eq('id', matchId);
+
+  if (error) {
+    throw new Error(error.message);
+  }
+}
+
 export async function getMyMatches(): Promise<Match[]> {
   const session = await getSession();
   if (!session) {
