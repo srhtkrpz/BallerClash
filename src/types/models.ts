@@ -76,7 +76,17 @@ export interface Match {
   createdAt: string;
 }
 
-export type MatchStatus = 'open' | 'pending' | 'confirmed' | 'completed' | 'cancelled';
+export type MatchStatus = 'open' | 'pending' | 'confirmed' | 'in_progress' | 'completed' | 'cancelled';
+
+export interface MatchPlayer {
+  id: string;
+  matchId: string;
+  userId: string;
+  teamId: string;
+  username: string;
+  checkedIn: boolean;
+  checkedInAt?: string;
+}
 
 export interface MatchRating {
   id: string;

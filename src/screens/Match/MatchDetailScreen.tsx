@@ -1,4 +1,4 @@
-import React, {useState, useCallback} from 'react';
+import React, {useState, useCallback, useRef} from 'react';
 import {
   View,
   Text,
@@ -13,14 +13,18 @@ import {useFocusEffect, useNavigation, useRoute} from '@react-navigation/native'
 import type {NativeStackNavigationProp} from '@react-navigation/native-stack';
 import type {RouteProp} from '@react-navigation/native';
 import {Colors, Typography, Spacing, Radii, Shadows} from '../../constants/theme';
-import type {Match, Team} from '../../types/models';
+import type {Match, Team, MatchPlayer} from '../../types/models';
 import type {HomeStackParamList} from '../../navigation/AppNavigator';
 import {
   getMatchById,
   challengeMatch,
   confirmMatch,
   cancelChallenge,
+  getMatchPlayers,
+  checkInToMatch,
+  startMatch,
 } from '../../services/supabase/matchesService';
+import {getCourtById} from '../../services/supabase/courtsService';
 import {getMyTeam} from '../../services/supabase/teamsService';
 import {getCurrentUser} from '../../services/supabase/client';
 
@@ -43,6 +47,10 @@ const MatchDetailScreen: React.FC = () => {
   const [myUserId, setMyUserId] = useState<string>('');
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState(false);
+  const [matchPlayers, setMatchPlayers] = useState<MatchPlayer[]>([]);
+  const [checkInLoading, setCheckInLoading] = useState(false);
+
+  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const loadData = useCallback(async () => {
     const [fetchedMatch, fetchedTeam, user] = await Promise.all([
@@ -54,12 +62,44 @@ const MatchDetailScreen: React.FC = () => {
     setMyTeam(fetchedTeam);
     setMyUserId(user?.id ?? '');
     setLoading(false);
+
+    if (
+      fetchedMatch?.status === 'confirmed' ||
+      fetchedMatch?.status === 'in_progress'
+    ) {
+      const players = await getMatchPlayers(matchId);
+      setMatchPlayers(players);
+    }
   }, [matchId]);
 
-  useFocusEffect(useCallback(() => {
-    setLoading(true);
-    loadData();
-  }, [loadData]));
+  useFocusEffect(
+    useCallback(() => {
+      setLoading(true);
+      loadData();
+
+      // Start polling for check-in status every 5 seconds
+      intervalRef.current = setInterval(async () => {
+        const currentMatch = await getMatchById(matchId);
+        if (
+          currentMatch?.status === 'confirmed' ||
+          currentMatch?.status === 'in_progress'
+        ) {
+          if (currentMatch) {
+            setMatch(currentMatch);
+          }
+          const players = await getMatchPlayers(matchId);
+          setMatchPlayers(players);
+        }
+      }, 5000);
+
+      return () => {
+        if (intervalRef.current) {
+          clearInterval(intervalRef.current);
+          intervalRef.current = null;
+        }
+      };
+    }, [loadData, matchId]),
+  );
 
   if (loading) {
     return (
@@ -101,9 +141,35 @@ const MatchDetailScreen: React.FC = () => {
 
   // Can I accept/reject: I'm the challenger captain and there's a pending opponent
   const canRespond =
-    match.status === 'pending' &&
-    amIChallenger &&
-    amICaptain;
+    match.status === 'pending' && amIChallenger && amICaptain;
+
+  // Check-in section visibility
+  const showCheckIn =
+    match.status === 'confirmed' || match.status === 'in_progress';
+
+  // Am I already checked in?
+  const myPlayerRecord = matchPlayers.find(p => p.userId === myUserId);
+  const alreadyCheckedIn = myPlayerRecord?.checkedIn ?? false;
+
+  // Am I in this match at all?
+  const amIInThisMatch = amIChallenger || amIOpponent;
+
+  // All players checked in?
+  const allCheckedIn =
+    matchPlayers.length > 0 && matchPlayers.every(p => p.checkedIn);
+
+  // Captain can start match when all checked in and status is confirmed
+  const canStartMatch =
+    allCheckedIn && match.status === 'confirmed' && amICaptain && amIChallenger;
+
+  // Split players by team
+  const challengerPlayers = matchPlayers.filter(
+    p => p.teamId === match.challengerTeamId,
+  );
+  const opponentPlayers = matchPlayers.filter(
+    p => p.teamId === match.opponentTeamId,
+  );
+  const checkedInCount = matchPlayers.filter(p => p.checkedIn).length;
 
   const handleChallenge = async () => {
     if (!myTeam) {
@@ -120,9 +186,11 @@ const MatchDetailScreen: React.FC = () => {
             setActionLoading(true);
             try {
               await challengeMatch(matchId, myTeam.id, myTeam.name);
-              Alert.alert('Başarılı', 'Meydan okuman gönderildi! Rakibin kabul edene kadar bekle.', [
-                {text: 'Tamam', onPress: () => navigation.goBack()},
-              ]);
+              Alert.alert(
+                'Başarılı',
+                'Meydan okuman gönderildi! Rakibin kabul edene kadar bekle.',
+                [{text: 'Tamam', onPress: () => navigation.goBack()}],
+              );
             } catch (err) {
               const msg = err instanceof Error ? err.message : 'Hata oluştu';
               Alert.alert('Hata', msg);
@@ -186,11 +254,72 @@ const MatchDetailScreen: React.FC = () => {
     );
   };
 
+  const handleCheckIn = async () => {
+    setCheckInLoading(true);
+    try {
+      const court = await getCourtById(match.courtId);
+      if (!court) {
+        Alert.alert('Hata', 'Saha bilgisi bulunamadı.');
+        return;
+      }
+      const result = await checkInToMatch(
+        matchId,
+        court.latitude,
+        court.longitude,
+      );
+      if (result.success) {
+        const players = await getMatchPlayers(matchId);
+        setMatchPlayers(players);
+        Alert.alert('Harika!', 'Sahaya başarıyla katıldın. ✅');
+      } else {
+        Alert.alert(
+          'Sahaya Yakın Değilsin',
+          `Korttan ${result.distanceMeters} metre uzaktasın. Sahaya yaklaş ve tekrar dene.`,
+        );
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Hata oluştu';
+      Alert.alert('Hata', msg);
+    } finally {
+      setCheckInLoading(false);
+    }
+  };
+
+  const handleStartMatch = async () => {
+    Alert.alert(
+      'Maçı Başlat',
+      'Tüm oyuncular sahada. Maçı başlatmak istediğine emin misin?',
+      [
+        {text: 'Vazgeç', style: 'cancel'},
+        {
+          text: 'Başlat',
+          onPress: async () => {
+            setActionLoading(true);
+            try {
+              await startMatch(matchId);
+              await loadData();
+            } catch (err) {
+              const msg = err instanceof Error ? err.message : 'Hata oluştu';
+              Alert.alert('Hata', msg);
+            } finally {
+              setActionLoading(false);
+            }
+          },
+        },
+      ],
+    );
+  };
+
   const scheduledDate = new Date(match.scheduledAt);
   const formattedDate = scheduledDate.toLocaleDateString('tr-TR', {
-    weekday: 'long', day: 'numeric', month: 'long',
+    weekday: 'long',
+    day: 'numeric',
+    month: 'long',
   });
-  const formattedTime = scheduledDate.toLocaleTimeString('tr-TR', {hour: '2-digit', minute: '2-digit'});
+  const formattedTime = scheduledDate.toLocaleTimeString('tr-TR', {
+    hour: '2-digit',
+    minute: '2-digit',
+  });
 
   return (
     <View style={s.screen}>
@@ -205,6 +334,12 @@ const MatchDetailScreen: React.FC = () => {
               <View style={s.confirmedBadge}>
                 <View style={[s.badgeDot, {backgroundColor: Colors.accentGreen}]} />
                 <Text style={s.confirmedBadgeText}>ONAYLANDI</Text>
+              </View>
+            )}
+            {match.status === 'in_progress' && (
+              <View style={s.inProgressBadge}>
+                <View style={[s.badgeDot, {backgroundColor: Colors.warning}]} />
+                <Text style={s.inProgressBadgeText}>DEVAM EDİYOR</Text>
               </View>
             )}
             {match.status === 'pending' && (
@@ -270,13 +405,98 @@ const MatchDetailScreen: React.FC = () => {
             </View>
           </View>
 
-          {/* Confirmed — members */}
+          {/* Confirmed — summary text */}
           {match.status === 'confirmed' && (
             <View style={s.section}>
               <Text style={s.sectionTitle}>Maç Onaylandı 🤝</Text>
               <Text style={s.sectionSub}>
-                {match.challengerTeamName} vs {match.opponentTeamName} karşılaşması {formattedDate} tarihinde {formattedTime} saatinde {match.courtName} sahasında oynanacak.
+                {match.challengerTeamName} vs {match.opponentTeamName} karşılaşması{' '}
+                {formattedDate} tarihinde {formattedTime} saatinde {match.courtName} sahasında oynanacak.
               </Text>
+            </View>
+          )}
+
+          {/* Check-in section */}
+          {showCheckIn && (
+            <View style={s.checkInSection}>
+              {/* Header */}
+              <View style={s.checkInHeader}>
+                <Text style={s.checkInTitle}>SAHA YOKLAMASI</Text>
+                <View style={s.checkInCountBadge}>
+                  <Text style={s.checkInCountText}>
+                    {checkedInCount}/{matchPlayers.length} oyuncu sahaya ulaştı
+                  </Text>
+                </View>
+              </View>
+
+              {/* Challenger team players */}
+              {challengerPlayers.length > 0 && (
+                <View style={s.teamPlayersBlock}>
+                  <Text style={s.teamPlayersLabel}>{match.challengerTeamName}</Text>
+                  <View style={s.playersGrid}>
+                    {challengerPlayers.map(player => (
+                      <View key={player.id} style={s.playerRow}>
+                        <Text style={player.checkedIn ? s.playerChecked : s.playerPending}>
+                          {player.checkedIn ? '✅' : '⏳'} {player.username}
+                        </Text>
+                      </View>
+                    ))}
+                  </View>
+                </View>
+              )}
+
+              {/* Opponent team players */}
+              {opponentPlayers.length > 0 && (
+                <View style={s.teamPlayersBlock}>
+                  <Text style={s.teamPlayersLabel}>{match.opponentTeamName}</Text>
+                  <View style={s.playersGrid}>
+                    {opponentPlayers.map(player => (
+                      <View key={player.id} style={s.playerRow}>
+                        <Text style={player.checkedIn ? s.playerChecked : s.playerPending}>
+                          {player.checkedIn ? '✅' : '⏳'} {player.username}
+                        </Text>
+                      </View>
+                    ))}
+                  </View>
+                </View>
+              )}
+
+              {/* Sahaya Geldim button — shown to match participants who haven't checked in yet */}
+              {amIInThisMatch && !alreadyCheckedIn && match.status === 'confirmed' && (
+                <TouchableOpacity
+                  style={[s.checkInBtn, checkInLoading && s.btnDisabled]}
+                  onPress={handleCheckIn}
+                  disabled={checkInLoading}
+                  activeOpacity={0.85}>
+                  {checkInLoading ? (
+                    <ActivityIndicator color="#fff" />
+                  ) : (
+                    <Text style={s.checkInBtnText}>📍 Sahaya Geldim</Text>
+                  )}
+                </TouchableOpacity>
+              )}
+
+              {/* Already checked in info */}
+              {amIInThisMatch && alreadyCheckedIn && (
+                <View style={s.alreadyCheckedInBox}>
+                  <Text style={s.alreadyCheckedInText}>✅ Sahaya girişin onaylandı</Text>
+                </View>
+              )}
+
+              {/* Start match button — challenger captain only, when all checked in */}
+              {canStartMatch && (
+                <TouchableOpacity
+                  style={[s.startMatchBtn, actionLoading && s.btnDisabled]}
+                  onPress={handleStartMatch}
+                  disabled={actionLoading}
+                  activeOpacity={0.85}>
+                  {actionLoading ? (
+                    <ActivityIndicator color="#fff" />
+                  ) : (
+                    <Text style={s.startMatchBtnText}>🏀 Maçı Başlat</Text>
+                  )}
+                </TouchableOpacity>
+              )}
             </View>
           )}
 
@@ -324,7 +544,9 @@ const MatchDetailScreen: React.FC = () => {
             {/* Context message */}
             {!canChallenge && !canRespond && match.status === 'open' && amIChallenger && (
               <View style={s.infoBox}>
-                <Text style={s.infoBoxText}>Bu senin maçın. Diğer kaptanlar sana meydan okuyabilir.</Text>
+                <Text style={s.infoBoxText}>
+                  Bu senin maçın. Diğer kaptanlar sana meydan okuyabilir.
+                </Text>
               </View>
             )}
             {match.status === 'pending' && amIOpponent && (
@@ -392,6 +614,17 @@ const s = StyleSheet.create({
     borderRadius: Radii.full,
   },
   confirmedBadgeText: {fontSize: Typography.xs, fontWeight: Typography.bold, color: Colors.accentGreen},
+  inProgressBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    alignSelf: 'flex-start',
+    backgroundColor: `${Colors.warning}20`,
+    paddingHorizontal: Spacing.sm,
+    paddingVertical: 4,
+    borderRadius: Radii.full,
+  },
+  inProgressBadgeText: {fontSize: Typography.xs, fontWeight: Typography.bold, color: Colors.warning},
   pendingBadge: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -487,6 +720,102 @@ const s = StyleSheet.create({
   sectionTitle: {fontSize: Typography.lg, fontWeight: Typography.bold, color: Colors.textPrimary},
   sectionSub: {fontSize: Typography.sm, color: Colors.textSecondary, lineHeight: 20},
 
+  // Check-in section
+  checkInSection: {
+    padding: Spacing.xl,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.divider,
+    gap: Spacing.lg,
+  },
+  checkInHeader: {
+    gap: Spacing.xs,
+  },
+  checkInTitle: {
+    fontSize: Typography.base,
+    fontWeight: Typography.black,
+    color: Colors.textPrimary,
+    letterSpacing: 1,
+  },
+  checkInCountBadge: {
+    alignSelf: 'flex-start',
+    backgroundColor: Colors.surface,
+    borderRadius: Radii.full,
+    paddingHorizontal: Spacing.sm,
+    paddingVertical: 4,
+    borderWidth: 1,
+    borderColor: Colors.border,
+  },
+  checkInCountText: {
+    fontSize: Typography.xs,
+    fontWeight: Typography.semibold,
+    color: Colors.textSecondary,
+  },
+  teamPlayersBlock: {
+    gap: Spacing.sm,
+  },
+  teamPlayersLabel: {
+    fontSize: Typography.sm,
+    fontWeight: Typography.bold,
+    color: Colors.textSecondary,
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+  playersGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: Spacing.sm,
+  },
+  playerRow: {
+    minWidth: '45%',
+  },
+  playerChecked: {
+    fontSize: Typography.sm,
+    fontWeight: Typography.semibold,
+    color: Colors.accentGreen,
+  },
+  playerPending: {
+    fontSize: Typography.sm,
+    fontWeight: Typography.semibold,
+    color: Colors.textMuted,
+  },
+  checkInBtn: {
+    backgroundColor: Colors.primary,
+    paddingVertical: Spacing.md,
+    borderRadius: Radii.xl,
+    alignItems: 'center',
+    ...Shadows.glow,
+  },
+  checkInBtnText: {
+    color: '#fff',
+    fontSize: Typography.base,
+    fontWeight: Typography.bold,
+  },
+  alreadyCheckedInBox: {
+    backgroundColor: `${Colors.accentGreen}15`,
+    borderRadius: Radii.lg,
+    padding: Spacing.md,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: `${Colors.accentGreen}40`,
+  },
+  alreadyCheckedInText: {
+    fontSize: Typography.sm,
+    fontWeight: Typography.semibold,
+    color: Colors.accentGreen,
+  },
+  startMatchBtn: {
+    backgroundColor: Colors.accentGreen,
+    paddingVertical: Spacing.md,
+    borderRadius: Radii.xl,
+    alignItems: 'center',
+    ...Shadows.card,
+  },
+  startMatchBtnText: {
+    color: '#fff',
+    fontSize: Typography.base,
+    fontWeight: Typography.bold,
+  },
+
   // Actions
   actionsSection: {
     padding: Spacing.xl,
@@ -554,7 +883,14 @@ const s = StyleSheet.create({
     paddingVertical: Spacing.sm,
   },
   detailLabel: {fontSize: Typography.sm, color: Colors.textMuted},
-  detailValue: {fontSize: Typography.sm, fontWeight: Typography.semibold, color: Colors.textPrimary, flexShrink: 1, textAlign: 'right', marginLeft: Spacing.md},
+  detailValue: {
+    fontSize: Typography.sm,
+    fontWeight: Typography.semibold,
+    color: Colors.textPrimary,
+    flexShrink: 1,
+    textAlign: 'right',
+    marginLeft: Spacing.md,
+  },
   detailDivider: {height: 1, backgroundColor: Colors.divider},
 });
 

@@ -1,5 +1,5 @@
-import {supabase, getSession} from './client';
-import type {Match, City, MatchStatus} from '../../types/models';
+import {supabase, getSession, getCurrentUser} from './client';
+import type {Match, City, MatchStatus, MatchPlayer} from '../../types/models';
 
 function rowToMatch(row: any): Match {
   return {
@@ -119,6 +119,7 @@ export async function confirmMatch(matchId: string): Promise<void> {
     throw new Error('Not authenticated');
   }
 
+  // 1. Set status confirmed
   const {error} = await supabase
     .from('matches')
     .update({status: 'confirmed'})
@@ -126,6 +127,32 @@ export async function confirmMatch(matchId: string): Promise<void> {
 
   if (error) {
     throw new Error(error.message);
+  }
+
+  // 2. Fetch match to get both team IDs
+  const match = await getMatchById(matchId);
+  if (!match) {
+    return;
+  }
+
+  // 3. Fetch members of both teams
+  const teamIds = [match.challengerTeamId, match.opponentTeamId].filter(Boolean) as string[];
+  const {data: members} = await supabase
+    .from('team_members')
+    .select('user_id, team_id')
+    .in('team_id', teamIds);
+
+  if (members && members.length > 0) {
+    // Insert, ignore conflicts (players already added)
+    await supabase.from('match_players').upsert(
+      members.map((m: any) => ({
+        match_id: matchId,
+        user_id: m.user_id,
+        team_id: m.team_id,
+        checked_in: false,
+      })),
+      {onConflict: 'match_id,user_id', ignoreDuplicates: true},
+    );
   }
 }
 
@@ -168,6 +195,101 @@ export async function cancelChallenge(matchId: string): Promise<void> {
 
   if (error) {
     throw new Error(error.message);
+  }
+}
+
+export async function getMatchPlayers(matchId: string): Promise<MatchPlayer[]> {
+  const {data, error} = await supabase
+    .from('match_players')
+    .select('*, profiles(username)')
+    .eq('match_id', matchId);
+  if (error || !data) {
+    return [];
+  }
+  return data.map((row: any) => ({
+    id: row.id,
+    matchId: row.match_id,
+    userId: row.user_id,
+    teamId: row.team_id,
+    username: row.profiles?.username ?? 'Oyuncu',
+    checkedIn: row.checked_in,
+    checkedInAt: row.checked_in_at ?? undefined,
+  }));
+}
+
+// Haversine distance in meters
+function haversineDistance(
+  lat1: number,
+  lon1: number,
+  lat2: number,
+  lon2: number,
+): number {
+  const R = 6371000;
+  const dLat = ((lat2 - lat1) * Math.PI) / 180;
+  const dLon = ((lon2 - lon1) * Math.PI) / 180;
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos((lat1 * Math.PI) / 180) *
+      Math.cos((lat2 * Math.PI) / 180) *
+      Math.sin(dLon / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+export async function checkInToMatch(
+  matchId: string,
+  courtLatitude: number,
+  courtLongitude: number,
+): Promise<{success: boolean; distanceMeters: number}> {
+  const user = await getCurrentUser();
+  if (!user) {
+    throw new Error('Not authenticated');
+  }
+
+  // Get current location
+  const loc = await import('expo-location');
+  const {status} = await loc.requestForegroundPermissionsAsync();
+  if (status !== 'granted') {
+    throw new Error('Konum izni gerekli.');
+  }
+
+  const position = await loc.getCurrentPositionAsync({
+    accuracy: loc.LocationAccuracy.High,
+  });
+  const distance = haversineDistance(
+    position.coords.latitude,
+    position.coords.longitude,
+    courtLatitude,
+    courtLongitude,
+  );
+
+  const CHECK_IN_RADIUS = 300; // meters
+  if (distance > CHECK_IN_RADIUS) {
+    return {success: false, distanceMeters: Math.round(distance)};
+  }
+
+  const {error} = await supabase
+    .from('match_players')
+    .update({checked_in: true, checked_in_at: new Date().toISOString()})
+    .eq('match_id', matchId)
+    .eq('user_id', user.id);
+  if (error) {
+    throw error;
+  }
+
+  return {success: true, distanceMeters: Math.round(distance)};
+}
+
+export async function startMatch(matchId: string): Promise<void> {
+  const user = await getCurrentUser();
+  if (!user) {
+    throw new Error('Not authenticated');
+  }
+  const {error} = await supabase
+    .from('matches')
+    .update({status: 'in_progress'})
+    .eq('id', matchId);
+  if (error) {
+    throw error;
   }
 }
 
