@@ -163,11 +163,9 @@ const RootNavigator: React.FC = () => {
   }
 
   return (
-    <NavigationContainer>
-      <Root.Navigator screenOptions={{headerShown: false}}>
-        <Root.Screen name="Main" component={MainTabNavigator} />
-      </Root.Navigator>
-    </NavigationContainer>
+    <Root.Navigator screenOptions={{headerShown: false}}>
+      <Root.Screen name="Main" component={MainTabNavigator} />
+    </Root.Navigator>
   );
 };
 
