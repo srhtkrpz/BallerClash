@@ -1,11 +1,19 @@
-import React from 'react';
+import React, {useState, useCallback} from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
+  ActivityIndicator,
 } from 'react-native';
 import {SafeAreaView} from 'react-native-safe-area-context';
+import {useFocusEffect, useNavigation} from '@react-navigation/native';
+import type {NativeStackNavigationProp} from '@react-navigation/native-stack';
 import {Colors, Typography, Spacing, Radii, Shadows} from '../../constants/theme';
 import {supabase} from '../../services/supabase/client';
 import {useAuth} from '../../context/AuthContext';
+import {getMyProfile} from '../../services/supabase/profilesService';
+import type {Profile} from '../../types/models';
+import type {RootStackParamList} from '../../navigation/AppNavigator';
+
+type NavProp = NativeStackNavigationProp<RootStackParamList>;
 
 const StatBox = ({label, value, color}: {label: string; value: string | number; color?: string}) => (
   <View style={ps.statBox}>
@@ -14,8 +22,47 @@ const StatBox = ({label, value, color}: {label: string; value: string | number; 
   </View>
 );
 
+const getRatingColor = (r: number) => {
+  if (r >= 8.5) {return Colors.ratingElite;}
+  if (r >= 7.0) {return Colors.ratingGood;}
+  if (r >= 5.5) {return Colors.ratingAvg;}
+  return Colors.ratingLow;
+};
+
 const ProfileScreen: React.FC = () => {
   const {user} = useAuth();
+  const navigation = useNavigation<NavProp>();
+  const [profile, setProfile] = useState<Profile | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  const loadProfile = useCallback(async () => {
+    const data = await getMyProfile();
+    if (!data) {
+      navigation.navigate('Onboarding');
+      setLoading(false);
+      return;
+    }
+    setProfile(data);
+    setLoading(false);
+  }, [navigation]);
+
+  useFocusEffect(useCallback(() => {
+    setLoading(true);
+    loadProfile();
+  }, [loadProfile]));
+
+  if (loading) {
+    return (
+      <View style={[ps.screen, {alignItems: 'center', justifyContent: 'center'}]}>
+        <ActivityIndicator color={Colors.primary} size="large" />
+      </View>
+    );
+  }
+
+  const displayRating = profile ? profile.avgRating.toFixed(1) : '—';
+  const ratingColor = profile && profile.totalMatches > 0
+    ? getRatingColor(profile.avgRating)
+    : Colors.textPrimary;
 
   return (
     <View style={ps.screen}>
@@ -27,7 +74,7 @@ const ProfileScreen: React.FC = () => {
             <View style={ps.avatarCircle}>
               <Text style={ps.avatarEmoji}>⛹️</Text>
             </View>
-            <Text style={ps.username}>Kullanıcı</Text>
+            <Text style={ps.username}>{profile?.username ?? 'Kullanıcı'}</Text>
             <Text style={ps.email}>{user?.email}</Text>
             <TouchableOpacity style={ps.editBtn} activeOpacity={0.8}>
               <Text style={ps.editBtnText}>Avatar Düzenle</Text>
@@ -37,16 +84,21 @@ const ProfileScreen: React.FC = () => {
           {/* Rating */}
           <View style={ps.ratingCard}>
             <Text style={ps.ratingLabel}>ORTALAMA REYTİNG</Text>
-            <Text style={ps.ratingValue}>—</Text>
-            <Text style={ps.ratingNote}>Henüz maç yok</Text>
+            <Text style={[ps.ratingValue, {color: ratingColor}]}>{displayRating}</Text>
+            {profile && profile.totalMatches === 0 && (
+              <Text style={ps.ratingNote}>Henüz maç yok</Text>
+            )}
+            {profile && profile.winStreak > 0 && (
+              <Text style={ps.ratingNote}>🔥 {profile.winStreak} maçlık seri</Text>
+            )}
           </View>
 
           {/* Stats grid */}
           <View style={ps.statsGrid}>
-            <StatBox label="Maç" value="0" />
-            <StatBox label="Galibiyet" value="0" color={Colors.accentGreen} />
-            <StatBox label="Mağlubiyet" value="0" color={Colors.accentRed} />
-            <StatBox label="Seri" value="0" color={Colors.accentGold} />
+            <StatBox label="Maç" value={profile?.totalMatches ?? 0} />
+            <StatBox label="Galibiyet" value={profile?.wins ?? 0} color={Colors.accentGreen} />
+            <StatBox label="Mağlubiyet" value={profile?.losses ?? 0} color={Colors.accentRed} />
+            <StatBox label="Seri" value={profile?.winStreak ?? 0} color={Colors.accentGold} />
           </View>
 
           {/* Match history placeholder */}

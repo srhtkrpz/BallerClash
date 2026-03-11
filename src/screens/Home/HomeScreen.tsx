@@ -1,12 +1,17 @@
 import React, {useState, useCallback} from 'react';
 import {
   View, Text, StyleSheet, FlatList, TouchableOpacity,
-  ActivityIndicator, RefreshControl,
+  ActivityIndicator, RefreshControl, Alert,
 } from 'react-native';
 import {SafeAreaView} from 'react-native-safe-area-context';
-import {useFocusEffect} from '@react-navigation/native';
+import {useFocusEffect, useNavigation} from '@react-navigation/native';
+import type {NativeStackNavigationProp} from '@react-navigation/native-stack';
 import {Colors, Typography, Spacing, Radii, Shadows} from '../../constants/theme';
 import type {Match, City} from '../../types/models';
+import type {HomeStackParamList} from '../../navigation/AppNavigator';
+import {getOpenMatches} from '../../services/supabase/matchesService';
+
+type NavProp = NativeStackNavigationProp<HomeStackParamList, 'HomeMain'>;
 
 const CITY_FILTERS: {key: City | 'all'; label: string}[] = [
   {key: 'all', label: 'Tümü'},
@@ -71,21 +76,29 @@ const MatchCard = ({match, onPress}: {match: Match; onPress: () => void}) => {
 };
 
 const HomeScreen: React.FC = () => {
+  const navigation = useNavigation<NavProp>();
   const [matches, setMatches] = useState<Match[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [cityFilter, setCityFilter] = useState<City | 'all'>('all');
 
   const loadMatches = useCallback(async () => {
-    // TODO: fetch from Supabase
+    const city = cityFilter === 'all' ? undefined : cityFilter;
+    const data = await getOpenMatches(city);
+    setMatches(data);
     setLoading(false);
     setRefreshing(false);
-  }, []);
+  }, [cityFilter]);
 
   useFocusEffect(useCallback(() => {
     setLoading(true);
     loadMatches();
   }, [loadMatches]));
+
+  const handleCityFilter = (key: City | 'all') => {
+    setCityFilter(key);
+    setLoading(true);
+  };
 
   const filtered = cityFilter === 'all' ? matches : matches.filter(m => m.city === cityFilter);
 
@@ -95,7 +108,10 @@ const HomeScreen: React.FC = () => {
         {/* Header */}
         <View style={s.header}>
           <Text style={s.title}>Maçlar</Text>
-          <TouchableOpacity style={s.createBtn} activeOpacity={0.8}>
+          <TouchableOpacity
+            style={s.createBtn}
+            activeOpacity={0.8}
+            onPress={() => Alert.alert('Yakında', 'Maç oluşturma özelliği yakında geliyor!')}>
             <Text style={s.createBtnText}>+ Maç Oluştur</Text>
           </TouchableOpacity>
         </View>
@@ -106,7 +122,7 @@ const HomeScreen: React.FC = () => {
             <TouchableOpacity
               key={f.key}
               style={[s.filterChip, cityFilter === f.key && s.filterChipActive]}
-              onPress={() => setCityFilter(f.key)}
+              onPress={() => handleCityFilter(f.key)}
               activeOpacity={0.8}>
               <Text style={[s.filterText, cityFilter === f.key && s.filterTextActive]}>{f.label}</Text>
             </TouchableOpacity>
@@ -138,7 +154,10 @@ const HomeScreen: React.FC = () => {
               />
             }
             renderItem={({item}) => (
-              <MatchCard match={item} onPress={() => {}} />
+              <MatchCard
+                match={item}
+                onPress={() => navigation.navigate('MatchDetail', {matchId: item.id})}
+              />
             )}
           />
         )}

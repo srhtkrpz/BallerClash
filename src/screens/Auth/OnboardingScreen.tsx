@@ -1,11 +1,17 @@
 import React, {useState} from 'react';
 import {
   View, Text, StyleSheet, TextInput, TouchableOpacity,
-  ScrollView, ActivityIndicator,
+  ScrollView, ActivityIndicator, Alert,
 } from 'react-native';
 import {SafeAreaView} from 'react-native-safe-area-context';
+import {useNavigation} from '@react-navigation/native';
+import type {NativeStackNavigationProp} from '@react-navigation/native-stack';
 import {Colors, Typography, Spacing, Radii} from '../../constants/theme';
 import type {City, PlayerPosition} from '../../types/models';
+import type {RootStackParamList} from '../../navigation/AppNavigator';
+import {createProfile} from '../../services/supabase/profilesService';
+
+type NavProp = NativeStackNavigationProp<RootStackParamList>;
 
 const CITIES: {key: City; label: string}[] = [
   {key: 'istanbul', label: 'İstanbul'},
@@ -22,6 +28,7 @@ const POSITIONS: {key: PlayerPosition; label: string; desc: string}[] = [
 ];
 
 const OnboardingScreen: React.FC = () => {
+  const navigation = useNavigation<NavProp>();
   const [step, setStep] = useState(0);
   const [username, setUsername] = useState('');
   const [instagram, setInstagram] = useState('');
@@ -31,8 +38,19 @@ const OnboardingScreen: React.FC = () => {
 
   const handleFinish = async () => {
     setLoading(true);
-    // TODO: save profile to Supabase
-    setLoading(false);
+    try {
+      await createProfile({
+        username: username.trim(),
+        city,
+        position,
+        instagramHandle: instagram.trim() || undefined,
+      });
+      navigation.goBack();
+    } catch (err: any) {
+      Alert.alert('Hata', err?.message ?? 'Profil oluşturulamadı. Tekrar dene.');
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
@@ -118,7 +136,7 @@ const OnboardingScreen: React.FC = () => {
           {step < 2 ? (
             <TouchableOpacity
               style={[s.btn, !username && step === 0 && s.btnDisabled]}
-              onPress={() => setStep(s => s + 1)}
+              onPress={() => setStep(prev => prev + 1)}
               disabled={step === 0 && !username}
               activeOpacity={0.85}>
               <Text style={s.btnText}>Devam →</Text>

@@ -1,10 +1,12 @@
-import React, {useState} from 'react';
+import React, {useState, useCallback} from 'react';
 import {
   View, Text, StyleSheet, FlatList, TouchableOpacity,
+  ActivityIndicator,
 } from 'react-native';
 import {SafeAreaView} from 'react-native-safe-area-context';
 import {Colors, Typography, Spacing, Radii, Shadows} from '../../constants/theme';
 import type {City, LeaderboardEntry} from '../../types/models';
+import {getLeaderboard} from '../../services/supabase/leaderboardService';
 
 const CITY_TABS: {key: City | 'all'; label: string}[] = [
   {key: 'all', label: 'Türkiye'},
@@ -12,8 +14,6 @@ const CITY_TABS: {key: City | 'all'; label: string}[] = [
   {key: 'ankara', label: 'Ankara'},
   {key: 'izmir', label: 'İzmir'},
 ];
-
-const RANK_COLORS = ['#fbbf24', '#9ca3af', '#cd7c2f'];
 
 const RankBadge = ({rank}: {rank: number}) => {
   if (rank <= 3) {
@@ -25,9 +25,9 @@ const RankBadge = ({rank}: {rank: number}) => {
 
 const RatingBar = ({rating}: {rating: number}) => {
   const getRatingColor = (r: number) => {
-    if (r >= 8.5) return Colors.ratingElite;
-    if (r >= 7.0) return Colors.ratingGood;
-    if (r >= 5.5) return Colors.ratingAvg;
+    if (r >= 8.5) {return Colors.ratingElite;}
+    if (r >= 7.0) {return Colors.ratingGood;}
+    if (r >= 5.5) {return Colors.ratingAvg;}
     return Colors.ratingLow;
   };
   return (
@@ -41,7 +41,24 @@ const RatingBar = ({rating}: {rating: number}) => {
 
 const LeaderboardScreen: React.FC = () => {
   const [cityTab, setCityTab] = useState<City | 'all'>('all');
-  const [entries] = useState<LeaderboardEntry[]>([]);
+  const [entries, setEntries] = useState<LeaderboardEntry[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  const loadEntries = useCallback(async (tab: City | 'all') => {
+    setLoading(true);
+    const city = tab === 'all' ? undefined : tab;
+    const data = await getLeaderboard(city);
+    setEntries(data);
+    setLoading(false);
+  }, []);
+
+  React.useEffect(() => {
+    loadEntries(cityTab);
+  }, [cityTab, loadEntries]);
+
+  const handleTabChange = (tab: City | 'all') => {
+    setCityTab(tab);
+  };
 
   return (
     <View style={lb.screen}>
@@ -57,7 +74,7 @@ const LeaderboardScreen: React.FC = () => {
             <TouchableOpacity
               key={tab.key}
               style={[lb.tab, cityTab === tab.key && lb.tabActive]}
-              onPress={() => setCityTab(tab.key)}
+              onPress={() => handleTabChange(tab.key)}
               activeOpacity={0.8}>
               <Text style={[lb.tabText, cityTab === tab.key && lb.tabTextActive]}>
                 {tab.label}
@@ -66,7 +83,11 @@ const LeaderboardScreen: React.FC = () => {
           ))}
         </View>
 
-        {entries.length === 0 ? (
+        {loading ? (
+          <View style={lb.center}>
+            <ActivityIndicator color={Colors.primary} size="large" />
+          </View>
+        ) : entries.length === 0 ? (
           <View style={lb.center}>
             <Text style={lb.emptyIcon}>🏆</Text>
             <Text style={lb.emptyTitle}>Sıralama henüz boş</Text>
