@@ -24,7 +24,7 @@ export async function getOpenMatches(city?: City): Promise<Match[]> {
   let query = supabase
     .from('matches')
     .select('*')
-    .in('status', ['open', 'pending', 'confirmed'])
+    .in('status', ['open', 'pending', 'confirmed', 'in_progress'])
     .order('scheduled_at', {ascending: true});
 
   if (city) {

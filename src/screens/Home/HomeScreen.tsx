@@ -36,6 +36,7 @@ const STATUS_COLOR: Record<string, string> = {
   open: Colors.accentGreen,
   pending: Colors.warning,
   confirmed: Colors.accentBlue,
+  in_progress: Colors.accentRed,
   completed: Colors.textMuted,
 };
 
@@ -43,6 +44,7 @@ const STATUS_LABEL: Record<string, string> = {
   open: 'Rakip Aranıyor',
   pending: 'Yanıt Bekleniyor',
   confirmed: 'Onaylandı',
+  in_progress: 'Devam Ediyor',
   completed: 'Tamamlandı',
 };
 

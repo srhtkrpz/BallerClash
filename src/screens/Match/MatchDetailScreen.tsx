@@ -162,6 +162,9 @@ const MatchDetailScreen: React.FC = () => {
   const canStartMatch =
     allCheckedIn && match.status === 'confirmed' && amICaptain && amIChallenger;
 
+  // Challenger captain can end the match
+  const canEndMatch = match.status === 'in_progress' && amICaptain && amIChallenger;
+
   // Split players by team
   const challengerPlayers = matchPlayers.filter(
     p => p.teamId === match.challengerTeamId,
@@ -497,6 +500,16 @@ const MatchDetailScreen: React.FC = () => {
                   )}
                 </TouchableOpacity>
               )}
+
+              {/* End match button — shown when in_progress */}
+              {canEndMatch && (
+                <TouchableOpacity
+                  style={s.endMatchBtn}
+                  onPress={() => navigation.navigate('PostMatch', {matchId})}
+                  activeOpacity={0.85}>
+                  <Text style={s.endMatchBtnText}>🏁 Maçı Bitir & Skoru Gir</Text>
+                </TouchableOpacity>
+              )}
             </View>
           )}
 
@@ -811,6 +824,18 @@ const s = StyleSheet.create({
     ...Shadows.card,
   },
   startMatchBtnText: {
+    color: '#fff',
+    fontSize: Typography.base,
+    fontWeight: Typography.bold,
+  },
+  endMatchBtn: {
+    backgroundColor: Colors.accentRed,
+    paddingVertical: Spacing.md,
+    borderRadius: Radii.xl,
+    alignItems: 'center',
+    ...Shadows.card,
+  },
+  endMatchBtnText: {
     color: '#fff',
     fontSize: Typography.base,
     fontWeight: Typography.bold,
