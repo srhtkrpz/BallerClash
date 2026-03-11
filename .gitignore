@@ -39,3 +39,6 @@ yarn-error.*
 # generated native folders
 /ios
 /android
+
+# Supabase credentials
+src/config/supabase.config.ts
