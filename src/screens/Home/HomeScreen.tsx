@@ -4,6 +4,7 @@ import {
   Text,
   StyleSheet,
   FlatList,
+  Image,
   TouchableOpacity,
   ActivityIndicator,
   RefreshControl,
@@ -19,11 +20,40 @@ import {
   getOpenMatches,
   getMyMatches,
   confirmMatch,
-  cancelChallenge,
+  deleteMatch,
 } from '../../services/supabase/matchesService';
 import {getMyTeam} from '../../services/supabase/teamsService';
 
 type NavProp = NativeStackNavigationProp<HomeStackParamList, 'HomeMain'>;
+
+// ── Featured court ────────────────────────────────────────────────────────────
+
+const KOBE_COURT = {
+  id: 'kobe-caddebostan',
+  name: 'Caddebostan Kobe Sahası',
+  city: 'istanbul',
+  address: 'Caddebostan, Operatör Cemil Topuzlu Cd. 132 B, 34728 Kadıköy/İstanbul',
+};
+
+const CourtCard = ({onPress}: {onPress: () => void}) => (
+  <TouchableOpacity style={s.courtCard} onPress={onPress} activeOpacity={0.88}>
+    <Image
+      source={require('../../../assets/courts/kobe.png')}
+      style={s.courtCardImg}
+      resizeMode="cover"
+    />
+    <View style={s.courtCardOverlay}>
+      <View style={s.courtCardBottom}>
+        <View style={s.courtCardLeft}>
+          <Text style={s.courtCardName}>{KOBE_COURT.name}</Text>
+        </View>
+        <View style={s.courtCardCta}>
+          <Text style={s.courtCardCtaText}>＋ Maç Oluştur</Text>
+        </View>
+      </View>
+    </View>
+  </TouchableOpacity>
+);
 
 const CITY_FILTERS: {key: City | 'all'; label: string}[] = [
   {key: 'all', label: 'Tümü'},
@@ -153,7 +183,7 @@ const PendingCard = ({
 const HomeScreen: React.FC = () => {
   const navigation = useNavigation<NavProp>();
 
-  const [activeTab, setActiveTab] = useState<'matches' | 'invitations'>('matches');
+  const [activeTab, setActiveTab] = useState<'matches' | 'invitations' | 'mymatches'>('matches');
   const [matches, setMatches] = useState<Match[]>([]);
   const [myMatches, setMyMatches] = useState<Match[]>([]);
   const [loading, setLoading] = useState(true);
@@ -188,7 +218,7 @@ const HomeScreen: React.FC = () => {
   const handleAccept = async (matchId: string) => {
     try {
       await confirmMatch(matchId);
-      loadData();
+      navigation.navigate('MatchLobby', {matchId});
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Hata oluştu';
       Alert.alert('Hata', msg);
@@ -206,7 +236,7 @@ const HomeScreen: React.FC = () => {
           style: 'destructive',
           onPress: async () => {
             try {
-              await cancelChallenge(matchId);
+              await deleteMatch(matchId);
               loadData();
             } catch (err) {
               const msg = err instanceof Error ? err.message : 'Hata oluştu';
@@ -229,8 +259,14 @@ const HomeScreen: React.FC = () => {
   const pendingOutgoing = myMatches.filter(
     m => m.status === 'pending' && m.opponentTeamId === myTeamId,
   );
+  const myActiveMatches = myMatches.filter(
+    m => (m.status === 'confirmed' || m.status === 'in_progress') &&
+         (m.challengerTeamId === myTeamId || m.opponentTeamId === myTeamId),
+  );
 
-  const filtered = cityFilter === 'all' ? matches : matches.filter(m => m.city === cityFilter);
+  // Maçlar tabı sadece açık maçları gösterir (onaylananlar genel listeden kalkar)
+  const filtered = (cityFilter === 'all' ? matches : matches.filter(m => m.city === cityFilter))
+    .filter(m => m.status === 'open');
 
   return (
     <View style={s.screen}>
@@ -265,11 +301,29 @@ const HomeScreen: React.FC = () => {
               </View>
             )}
           </TouchableOpacity>
+          <TouchableOpacity
+            style={[s.tab, activeTab === 'mymatches' && s.tabActive]}
+            onPress={() => setActiveTab('mymatches')}
+            activeOpacity={0.8}>
+            <Text style={[s.tabText, activeTab === 'mymatches' && s.tabTextActive]}>Maçlarım</Text>
+            {myActiveMatches.length > 0 && (
+              <View style={s.tabBadge}>
+                <Text style={s.tabBadgeText}>{myActiveMatches.length}</Text>
+              </View>
+            )}
+          </TouchableOpacity>
         </View>
 
         {/* Matches Tab */}
         {activeTab === 'matches' && (
           <>
+            {/* Featured court card */}
+            <View style={s.courtCardWrapper}>
+              <CourtCard
+                onPress={() => navigation.navigate('CreateMatch', {preselectedCourt: KOBE_COURT})}
+              />
+            </View>
+
             <View style={s.filterRow}>
               {CITY_FILTERS.map(f => (
                 <TouchableOpacity
@@ -316,6 +370,43 @@ const HomeScreen: React.FC = () => {
           </>
         )}
 
+        {/* Maçlarım Tab */}
+        {activeTab === 'mymatches' && (
+          <>
+            {loading ? (
+              <View style={s.center}>
+                <ActivityIndicator color={Colors.primary} size="large" />
+              </View>
+            ) : myActiveMatches.length === 0 ? (
+              <View style={s.center}>
+                <Text style={s.emptyIcon}>🏀</Text>
+                <Text style={s.emptyTitle}>Aktif maç yok</Text>
+                <Text style={s.emptySub}>Onaylanan maçların burada görünür.</Text>
+              </View>
+            ) : (
+              <FlatList
+                data={myActiveMatches}
+                keyExtractor={m => m.id}
+                contentContainerStyle={s.list}
+                showsVerticalScrollIndicator={false}
+                refreshControl={
+                  <RefreshControl
+                    refreshing={refreshing}
+                    onRefresh={() => {setRefreshing(true); loadData();}}
+                    tintColor={Colors.primary}
+                  />
+                }
+                renderItem={({item}) => (
+                  <MatchCard
+                    match={item}
+                    onPress={() => navigation.navigate('MatchDetail', {matchId: item.id})}
+                  />
+                )}
+              />
+            )}
+          </>
+        )}
+
         {/* Invitations Tab */}
         {activeTab === 'invitations' && (
           <>
@@ -331,11 +422,11 @@ const HomeScreen: React.FC = () => {
                   pendingIncoming.length === 0
                     ? {type: 'empty', label: 'Bekleyen meydan okuma yok', key: 'empty-incoming'}
                     : null,
-                  {type: 'section', label: 'Maçlarım', key: 'sec-mine'},
+                  {type: 'section', label: 'Gönderilen Meydan Okumalar', key: 'sec-outgoing'},
                   ...myOpenMatches.map(m => ({type: 'myopen', match: m, key: `myopen-${m.id}`})),
                   ...pendingOutgoing.map(m => ({type: 'mypending', match: m, key: `mypending-${m.id}`})),
                   (myOpenMatches.length + pendingOutgoing.length) === 0
-                    ? {type: 'empty', label: 'Henüz maç oluşturmadın', key: 'empty-mine'}
+                    ? {type: 'empty', label: 'Gönderilen meydan okuma yok', key: 'empty-outgoing'}
                     : null,
                 ].filter(Boolean) as Array<{type: string; label?: string; match?: Match; key: string}>}
                 keyExtractor={item => item.key}
@@ -551,6 +642,50 @@ const s = StyleSheet.create({
     alignItems: 'center',
   },
   acceptBtnText: {color: '#fff', fontSize: Typography.sm, fontWeight: Typography.bold},
+
+  // Court card
+  courtCardWrapper: {paddingHorizontal: Spacing.lg, paddingTop: Spacing.sm, paddingBottom: Spacing.xs},
+  courtCard: {
+    borderRadius: Radii.xl,
+    overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: Colors.border,
+    height: 200,
+    ...Shadows.card,
+  },
+  courtCardImg: {width: '100%', height: '100%', position: 'absolute'},
+  courtCardOverlay: {
+    flex: 1,
+    justifyContent: 'flex-end',
+  },
+  courtCardBottom: {
+    flexDirection: 'row',
+    alignItems: 'flex-end',
+    justifyContent: 'space-between',
+    backgroundColor: 'rgba(0,0,0,0.30)',
+    paddingHorizontal: Spacing.md,
+    paddingVertical: Spacing.sm,
+    gap: Spacing.sm,
+  },
+  courtCardLeft: {gap: 3, flex: 1},
+  courtCardBadge: {
+    alignSelf: 'flex-start',
+    backgroundColor: `${Colors.primary}cc`,
+    borderRadius: Radii.full,
+    paddingHorizontal: Spacing.sm,
+    paddingVertical: 3,
+  },
+  courtCardBadgeText: {fontSize: Typography.xs, fontWeight: Typography.bold, color: '#fff'},
+  courtCardName: {fontSize: Typography.base, fontWeight: Typography.black, color: '#fff'},
+  courtCardAddr: {fontSize: Typography.xs, color: 'rgba(255,255,255,0.75)'},
+  courtCardCta: {
+    alignItems: 'center',
+    backgroundColor: Colors.primary,
+    borderRadius: Radii.full,
+    paddingHorizontal: Spacing.sm,
+    paddingVertical: 5,
+  },
+  courtCardCtaText: {fontSize: Typography.xs, fontWeight: Typography.bold, color: '#fff'},
 });
 
 export default HomeScreen;

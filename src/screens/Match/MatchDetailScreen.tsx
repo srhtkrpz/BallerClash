@@ -19,7 +19,7 @@ import {
   getMatchById,
   challengeMatch,
   confirmMatch,
-  cancelChallenge,
+  deleteMatch,
   getMatchPlayers,
   checkInToMatch,
   startMatch,
@@ -218,7 +218,7 @@ const MatchDetailScreen: React.FC = () => {
             setActionLoading(true);
             try {
               await confirmMatch(matchId);
-              await loadData();
+              navigation.replace('MatchLobby', {matchId});
             } catch (err) {
               const msg = err instanceof Error ? err.message : 'Hata oluştu';
               Alert.alert('Hata', msg);
@@ -243,8 +243,8 @@ const MatchDetailScreen: React.FC = () => {
           onPress: async () => {
             setActionLoading(true);
             try {
-              await cancelChallenge(matchId);
-              await loadData();
+              await deleteMatch(matchId);
+              navigation.goBack();
             } catch (err) {
               const msg = err instanceof Error ? err.message : 'Hata oluştu';
               Alert.alert('Hata', msg);
@@ -408,7 +408,7 @@ const MatchDetailScreen: React.FC = () => {
             </View>
           </View>
 
-          {/* Confirmed — summary text */}
+          {/* Confirmed — summary text + Lobby button */}
           {match.status === 'confirmed' && (
             <View style={s.section}>
               <Text style={s.sectionTitle}>Maç Onaylandı 🤝</Text>
@@ -416,6 +416,26 @@ const MatchDetailScreen: React.FC = () => {
                 {match.challengerTeamName} vs {match.opponentTeamName} karşılaşması{' '}
                 {formattedDate} tarihinde {formattedTime} saatinde {match.courtName} sahasında oynanacak.
               </Text>
+              {amIInThisMatch && (
+                <TouchableOpacity
+                  style={s.lobbyBtn}
+                  onPress={() => navigation.navigate('MatchLobby', {matchId})}
+                  activeOpacity={0.85}>
+                  <Text style={s.lobbyBtnText}>🏟  Maç Lobisine Git</Text>
+                </TouchableOpacity>
+              )}
+            </View>
+          )}
+
+          {/* In progress — Lobby button */}
+          {match.status === 'in_progress' && amIInThisMatch && (
+            <View style={s.section}>
+              <TouchableOpacity
+                style={s.lobbyBtn}
+                onPress={() => navigation.navigate('MatchLobby', {matchId})}
+                activeOpacity={0.85}>
+                <Text style={s.lobbyBtnText}>🏟  Maç Lobisine Git</Text>
+              </TouchableOpacity>
             </View>
           )}
 
@@ -836,6 +856,19 @@ const s = StyleSheet.create({
     ...Shadows.card,
   },
   endMatchBtnText: {
+    color: '#fff',
+    fontSize: Typography.base,
+    fontWeight: Typography.bold,
+  },
+  lobbyBtn: {
+    backgroundColor: Colors.primary,
+    paddingVertical: Spacing.md,
+    borderRadius: Radii.xl,
+    alignItems: 'center',
+    marginTop: Spacing.sm,
+    ...Shadows.glow,
+  },
+  lobbyBtnText: {
     color: '#fff',
     fontSize: Typography.base,
     fontWeight: Typography.bold,

@@ -19,7 +19,7 @@ import type {HomeStackParamList} from '../../navigation/AppNavigator';
 import {getMatchById, getMatchPlayers, completeMatch} from '../../services/supabase/matchesService';
 import {submitRatings} from '../../services/supabase/ratingsService';
 import {getCurrentUser} from '../../services/supabase/client';
-import {getMyTeam} from '../../services/supabase/teamsService';
+import {getMyTeam, getTeamMembers} from '../../services/supabase/teamsService';
 
 type NavProp = NativeStackNavigationProp<HomeStackParamList, 'PostMatch'>;
 type RouteType = RouteProp<HomeStackParamList, 'PostMatch'>;
@@ -27,6 +27,12 @@ type RouteType = RouteProp<HomeStackParamList, 'PostMatch'>;
 type Step = 'loading' | 'scores' | 'fairplay' | 'ratings' | 'done';
 
 // ── RatingSelector ───────────────────────────────────────────────────────────
+
+// 1=kırmızı → 10=yeşil, HSL hue geçişi (0°→120°)
+function ratingColor(n: number): string {
+  const hue = Math.round(((n - 1) / 9) * 120);
+  return `hsl(${hue}, 85%, 45%)`;
+}
 
 const RatingSelector = ({
   value,
@@ -38,10 +44,16 @@ const RatingSelector = ({
   <View style={rs.row}>
     {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map(n => {
       const active = value >= n;
+      const color = ratingColor(n);
       return (
         <TouchableOpacity
           key={n}
-          style={[rs.dot, active && rs.dotActive]}
+          style={[
+            rs.dot,
+            active
+              ? {backgroundColor: color, borderColor: 'rgba(0,0,0,0.35)', borderWidth: 1}
+              : rs.dotInactive,
+          ]}
           onPress={() => onChange(n)}
           activeOpacity={0.7}>
           <Text style={[rs.dotText, active && rs.dotTextActive]}>{n}</Text>
@@ -55,11 +67,12 @@ const rs = StyleSheet.create({
   row: {flexDirection: 'row', gap: 4, flexWrap: 'wrap'},
   dot: {
     width: 30, height: 30, borderRadius: 15,
-    backgroundColor: Colors.surface,
-    borderWidth: 1, borderColor: Colors.border,
     alignItems: 'center', justifyContent: 'center',
   },
-  dotActive: {backgroundColor: Colors.primary, borderColor: Colors.primary},
+  dotInactive: {
+    backgroundColor: Colors.surface,
+    borderWidth: 1, borderColor: 'rgba(0,0,0,0.35)',
+  },
   dotText: {fontSize: 11, fontWeight: Typography.bold, color: Colors.textMuted},
   dotTextActive: {color: '#fff'},
 });
@@ -117,6 +130,7 @@ const PostMatchScreen: React.FC = () => {
 
   const [scoreChallenger, setScoreChallenger] = useState('');
   const [scoreOpponent, setScoreOpponent] = useState('');
+  const [finalScores, setFinalScores] = useState<{ch: number; op: number} | null>(null);
   const [ratings, setRatings] = useState<Record<string, number>>({});
   const [submitting, setSubmitting] = useState(false);
 
@@ -137,14 +151,42 @@ const PostMatchScreen: React.FC = () => {
     setMyTeamId(team.id);
 
     const players = await getMatchPlayers(matchId);
-    const opponents = players.filter(p => p.teamId !== team.id);
+    let opponents = players.filter(p => p.teamId !== team.id);
+
+    // Fallback: match_players boşsa (maç onayı öncesi üyeler eklenmemişse)
+    // rakip takımın üyelerini doğrudan team_members'tan çek
+    if (opponents.length === 0 && fetchedMatch.opponentTeamId && fetchedMatch.challengerTeamId) {
+      const opponentTeamId = team.id === fetchedMatch.challengerTeamId
+        ? fetchedMatch.opponentTeamId
+        : fetchedMatch.challengerTeamId;
+      const opponentMembers = await getTeamMembers(opponentTeamId);
+      opponents = opponentMembers.map(m => ({
+        id: m.userId,
+        matchId,
+        userId: m.userId,
+        teamId: opponentTeamId,
+        username: m.username,
+        checkedIn: false,
+        checkedInAt: undefined,
+      }));
+    }
+
     setOpponentPlayers(opponents);
 
     const initRatings: Record<string, number> = {};
     opponents.forEach(p => { initRatings[p.userId] = 7; });
     setRatings(initRatings);
 
-    setStep('scores');
+    // If match already completed (arrived from MatchResultsScreen), skip score entry
+    if (fetchedMatch.status === 'completed') {
+      setFinalScores({
+        ch: fetchedMatch.scoreChallenger ?? 0,
+        op: fetchedMatch.scoreOpponent ?? 0,
+      });
+      setStep('fairplay');
+    } else {
+      setStep('scores');
+    }
   }, [matchId, navigation]);
 
   useEffect(() => { load(); }, [load]);
@@ -172,12 +214,17 @@ const PostMatchScreen: React.FC = () => {
 
   const handleSubmit = async () => {
     if (!match) {return;}
-    const {sc, so} = parsedScores();
-    const winnerTeamId = sc > so ? match.challengerTeamId : match.opponentTeamId!;
 
     setSubmitting(true);
     try {
-      await completeMatch(matchId, sc, so, winnerTeamId);
+      // Only complete match if not already completed (i.e. not coming from MatchResultsScreen)
+      if (match.status !== 'completed') {
+        const {sc, so} = parsedScores();
+        const winnerTeamId = sc > so ? match.challengerTeamId : match.opponentTeamId!;
+        await completeMatch(matchId, sc, so, winnerTeamId);
+        setFinalScores({ch: sc, op: so});
+      }
+      // If match was already completed, finalScores was set in load()
 
       const ratingsList = Object.entries(ratings).map(([userId, score]) => ({userId, score}));
       if (ratingsList.length > 0) {
@@ -210,7 +257,8 @@ const PostMatchScreen: React.FC = () => {
   // ── DONE ─────────────────────────────────────────────────────────
 
   if (step === 'done' && match) {
-    const {sc, so} = parsedScores();
+    const sc = finalScores?.ch ?? 0;
+    const so = finalScores?.op ?? 0;
     const iChallenger = myTeamId === match.challengerTeamId;
     const weWon = iChallenger ? sc > so : so > sc;
     const myScore = iChallenger ? sc : so;
@@ -347,7 +395,7 @@ const PostMatchScreen: React.FC = () => {
       <View style={s.screen}>
         <SafeAreaView style={s.safe} edges={['top', 'bottom']}>
           <TopBar
-            onBack={() => setStep('scores')}
+            onBack={() => finalScores && match?.status === 'completed' ? navigation.goBack() : setStep('scores')}
             title="Adil Oyna"
             currentStep={2}
             totalSteps={3}

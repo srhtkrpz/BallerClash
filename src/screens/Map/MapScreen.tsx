@@ -18,14 +18,36 @@ const MapScreen: React.FC = () => {
   const [selectedCourt, setSelectedCourt] = useState<Court | null>(null);
 
   useEffect(() => {
+    let cancelled = false;
     (async () => {
       const {status} = await Location.requestForegroundPermissionsAsync();
-      if (status === 'granted') {
-        const loc = await Location.getCurrentPositionAsync({});
-        setLocation({latitude: loc.coords.latitude, longitude: loc.coords.longitude});
+      if (status !== 'granted') {
+        setLoading(false);
+        return;
       }
-      setLoading(false);
+
+      // 1) Hemen bilinen son konumu göster (gecikmesiz)
+      try {
+        const last = await Location.getLastKnownPositionAsync();
+        if (last && !cancelled) {
+          setLocation({latitude: last.coords.latitude, longitude: last.coords.longitude});
+          setLoading(false);
+        }
+      } catch {}
+
+      // 2) Gerçek GPS konumunu al ve güncelle
+      try {
+        const loc = await Location.getCurrentPositionAsync({
+          accuracy: Location.Accuracy.Balanced,
+        });
+        if (!cancelled) {
+          setLocation({latitude: loc.coords.latitude, longitude: loc.coords.longitude});
+        }
+      } catch {}
+
+      if (!cancelled) {setLoading(false);}
     })();
+    return () => { cancelled = true; };
   }, []);
 
   if (loading) {
@@ -45,7 +67,7 @@ const MapScreen: React.FC = () => {
       <MapView
         style={StyleSheet.absoluteFill}
         provider={Platform.OS === 'android' ? PROVIDER_GOOGLE : undefined}
-        initialRegion={region}
+        region={region}
         showsUserLocation
         showsMyLocationButton
         customMapStyle={darkMapStyle}>

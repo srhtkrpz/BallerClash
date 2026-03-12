@@ -12,7 +12,8 @@
       "backgroundColor": "#0d0d0f"
     },
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "bundleIdentifier": "com.anonymous.ballercash"
     },
     "android": {
       "adaptiveIcon": {

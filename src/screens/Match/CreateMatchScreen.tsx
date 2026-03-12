@@ -6,21 +6,24 @@ import {
   TouchableOpacity,
   FlatList,
   ScrollView,
+  TextInput,
   ActivityIndicator,
   Alert,
 } from 'react-native';
 import {SafeAreaView} from 'react-native-safe-area-context';
 import * as Location from 'expo-location';
-import {useNavigation} from '@react-navigation/native';
-import type {NativeStackNavigationProp} from '@react-navigation/native-stack';
+import {useNavigation, useRoute} from '@react-navigation/native';
+import type {NativeStackNavigationProp, NativeStackScreenProps} from '@react-navigation/native-stack';
 import {Colors, Typography, Spacing, Radii, Shadows} from '../../constants/theme';
 import type {Court, City} from '../../types/models';
 import type {HomeStackParamList} from '../../navigation/AppNavigator';
 import {getCourts} from '../../services/supabase/courtsService';
 import {createMatch} from '../../services/supabase/matchesService';
 import {getMyTeam} from '../../services/supabase/teamsService';
+import {supabase} from '../../services/supabase/client';
 
 type NavProp = NativeStackNavigationProp<HomeStackParamList, 'CreateMatch'>;
+type RouteProp = NativeStackScreenProps<HomeStackParamList, 'CreateMatch'>['route'];
 
 const CITY_CENTERS: {city: City; name: string; lat: number; lng: number}[] = [
   {city: 'istanbul', name: 'İstanbul', lat: 41.0082, lng: 28.9784},
@@ -72,6 +75,8 @@ function buildDays(): {date: Date; dayLabel: string; numLabel: string}[] {
 
 const CreateMatchScreen: React.FC = () => {
   const navigation = useNavigation<NavProp>();
+  const route = useRoute<RouteProp>();
+  const preselectedCourt = route.params?.preselectedCourt;
 
   const [step, setStep] = useState<0 | 1 | 2 | 3>(0);
   const [locationError, setLocationError] = useState<string | null>(null);
@@ -84,6 +89,13 @@ const CreateMatchScreen: React.FC = () => {
   const [submitting, setSubmitting] = useState(false);
   const [myTeamName, setMyTeamName] = useState<string>('');
   const [myTeamId, setMyTeamId] = useState<string>('');
+
+  // Direct invite state
+  const [matchType, setMatchType] = useState<'open' | 'direct'>('open');
+  const [inviteUsername, setInviteUsername] = useState('');
+  const [inviteTeam, setInviteTeam] = useState<{teamId: string; teamName: string} | null>(null);
+  const [lookingUpUser, setLookingUpUser] = useState(false);
+  const [lookupError, setLookupError] = useState<string | null>(null);
 
   const init = useCallback(async () => {
     // Check team first
@@ -98,6 +110,24 @@ const CreateMatchScreen: React.FC = () => {
     }
     setMyTeamId(team.id);
     setMyTeamName(team.name);
+
+    // If a court is already pre-selected, skip location detection
+    if (preselectedCourt) {
+      const cityMatch = CITY_CENTERS.find(c => c.city === preselectedCourt.city);
+      setDetectedCity(cityMatch ? {city: cityMatch.city, name: cityMatch.name} : {city: 'istanbul', name: 'İstanbul'});
+      setSelectedCourt({
+        id: preselectedCourt.id,
+        name: preselectedCourt.name,
+        address: preselectedCourt.address,
+        city: preselectedCourt.city as City,
+        latitude: 0,
+        longitude: 0,
+        isIndoor: false,
+        createdAt: '',
+      });
+      setStep(2);
+      return;
+    }
 
     // Request location
     const {status} = await Location.requestForegroundPermissionsAsync();
@@ -126,14 +156,61 @@ const CreateMatchScreen: React.FC = () => {
     const fetched = await getCourts(city.city);
     setCourts(fetched);
     setStep(1);
-  }, [navigation]);
+  }, [navigation, preselectedCourt]);
 
   useEffect(() => {
     init();
   }, [init]);
 
+  const lookupTeamByUsername = useCallback(async (username: string) => {
+    const trimmed = username.trim();
+    if (!trimmed) {return;}
+    setLookingUpUser(true);
+    setLookupError(null);
+    setInviteTeam(null);
+    try {
+      const {data: profile} = await supabase
+        .from('profiles')
+        .select('id, username, team_id')
+        .eq('username', trimmed)
+        .maybeSingle();
+
+      if (!profile) {
+        setLookupError('Kullanıcı bulunamadı.');
+        return;
+      }
+      if (!profile.team_id) {
+        setLookupError(`@${trimmed} henüz bir takımı yok.`);
+        return;
+      }
+      if (profile.team_id === myTeamId) {
+        setLookupError('Kendi takımına davet gönderemezsin.');
+        return;
+      }
+      const {data: team} = await supabase
+        .from('teams')
+        .select('id, name')
+        .eq('id', profile.team_id)
+        .maybeSingle();
+
+      if (!team) {
+        setLookupError('Takım bilgisi alınamadı.');
+        return;
+      }
+      setInviteTeam({teamId: team.id, teamName: team.name});
+    } catch {
+      setLookupError('Arama sırasında bir hata oluştu.');
+    } finally {
+      setLookingUpUser(false);
+    }
+  }, [myTeamId]);
+
   const handleCreateMatch = async () => {
     if (!selectedCourt || !selectedDay || !selectedTime || !detectedCity) {
+      return;
+    }
+    if (matchType === 'direct' && !inviteTeam) {
+      Alert.alert('Davet', 'Önce davet etmek istediğin kaptanın kullanıcı adını ara.');
       return;
     }
 
@@ -143,14 +220,29 @@ const CreateMatchScreen: React.FC = () => {
       const scheduledAt = new Date(selectedDay);
       scheduledAt.setHours(hours, minutes, 0, 0);
 
-      await createMatch({
-        courtId: selectedCourt.id,
-        courtName: selectedCourt.name,
-        city: detectedCity.city,
-        scheduledAt: scheduledAt.toISOString(),
-        challengerTeamId: myTeamId,
-        challengerTeamName: myTeamName,
-      });
+      if (matchType === 'open') {
+        await createMatch({
+          courtId: selectedCourt.id,
+          courtName: selectedCourt.name,
+          city: detectedCity.city,
+          scheduledAt: scheduledAt.toISOString(),
+          challengerTeamId: myTeamId,
+          challengerTeamName: myTeamName,
+        });
+      } else {
+        // Direct invite: invited team = challenger (sees accept/reject), my team = opponent
+        await createMatch({
+          courtId: selectedCourt.id,
+          courtName: selectedCourt.name,
+          city: detectedCity.city,
+          scheduledAt: scheduledAt.toISOString(),
+          challengerTeamId: inviteTeam!.teamId,
+          challengerTeamName: inviteTeam!.teamName,
+          opponentTeamId: myTeamId,
+          opponentTeamName: myTeamName,
+          status: 'pending',
+        });
+      }
 
       navigation.goBack();
     } catch (err) {
@@ -183,9 +275,27 @@ const CreateMatchScreen: React.FC = () => {
                 <Text style={s.locationErrorIcon}>📍</Text>
                 <Text style={s.locationErrorTitle}>Konum Algılanamadı</Text>
                 <Text style={s.locationErrorMsg}>{locationError}</Text>
-                <TouchableOpacity style={s.primaryBtn} onPress={() => { setLocationError(null); init(); }}>
+                <TouchableOpacity style={[s.primaryBtn, {marginBottom: 8}]} onPress={() => { setLocationError(null); init(); }}>
                   <Text style={s.primaryBtnText}>Tekrar Dene</Text>
                 </TouchableOpacity>
+                <Text style={s.manualCityLabel}>veya şehri manuel seç:</Text>
+                <View style={s.manualCityRow}>
+                  {CITY_CENTERS.map(c => (
+                    <TouchableOpacity
+                      key={c.city}
+                      style={s.manualCityChip}
+                      activeOpacity={0.8}
+                      onPress={async () => {
+                        setLocationError(null);
+                        setDetectedCity({city: c.city, name: c.name});
+                        const fetched = await getCourts(c.city);
+                        setCourts(fetched);
+                        setStep(1);
+                      }}>
+                      <Text style={s.manualCityChipText}>{c.name}</Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
               </>
             ) : (
               <>
@@ -204,7 +314,7 @@ const CreateMatchScreen: React.FC = () => {
       <SafeAreaView style={s.safe} edges={['top', 'bottom']}>
         {/* Header */}
         <View style={s.topBar}>
-          <TouchableOpacity onPress={() => (step === 1 ? navigation.goBack() : setStep((step - 1) as 1 | 2))}>
+          <TouchableOpacity onPress={() => (step === 1 || (step === 2 && !!preselectedCourt) ? navigation.goBack() : setStep((step - 1) as 1 | 2))}>
             <Text style={s.backBtnText}>← Geri</Text>
           </TouchableOpacity>
           <Text style={s.topTitle}>Maç Oluştur</Text>
@@ -317,21 +427,17 @@ const CreateMatchScreen: React.FC = () => {
           </View>
         )}
 
-        {/* Step 3 — Review & Create */}
+        {/* Step 3 — Match Type + Review & Create */}
         {step === 3 && (
           <ScrollView style={s.stepContainer} contentContainerStyle={s.reviewScroll} showsVerticalScrollIndicator={false}>
             <Text style={s.stepTitle}>Maçı İncele</Text>
             <Text style={s.stepSub}>Bilgileri kontrol et ve maçı oluştur.</Text>
 
+            {/* Summary */}
             <View style={s.summaryCard}>
               <View style={s.summaryRow}>
                 <Text style={s.summaryLabel}>Saha</Text>
                 <Text style={s.summaryValue}>{selectedCourt?.name}</Text>
-              </View>
-              <View style={s.summaryDivider} />
-              <View style={s.summaryRow}>
-                <Text style={s.summaryLabel}>Şehir</Text>
-                <Text style={s.summaryValue}>{detectedCity?.name}</Text>
               </View>
               <View style={s.summaryDivider} />
               <View style={s.summaryRow}>
@@ -345,22 +451,88 @@ const CreateMatchScreen: React.FC = () => {
               </View>
             </View>
 
-            <View style={s.infoBox}>
-              <Text style={s.infoBoxText}>
-                Maç oluşturulduktan sonra diğer kaptanlar sana meydan okuyabilir.
-                Gelen meydan okumaları "Davetler" sekmesinden kabul veya reddedebilirsin.
-              </Text>
+            {/* Match type picker */}
+            <Text style={s.matchTypeTitle}>MAÇ TÜRÜ</Text>
+            <View style={s.matchTypeRow}>
+              <TouchableOpacity
+                style={[s.matchTypeCard, matchType === 'open' && s.matchTypeCardActive]}
+                activeOpacity={0.8}
+                onPress={() => { setMatchType('open'); setInviteTeam(null); setLookupError(null); setInviteUsername(''); }}>
+                <Text style={s.matchTypeIcon}>🌐</Text>
+                <Text style={[s.matchTypeLabel, matchType === 'open' && s.matchTypeLabelActive]}>Herkese Açık</Text>
+                <Text style={s.matchTypeDesc}>Herhangi bir takım meydan okuyabilir</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[s.matchTypeCard, matchType === 'direct' && s.matchTypeCardActive]}
+                activeOpacity={0.8}
+                onPress={() => setMatchType('direct')}>
+                <Text style={s.matchTypeIcon}>📨</Text>
+                <Text style={[s.matchTypeLabel, matchType === 'direct' && s.matchTypeLabelActive]}>Direkt Davet</Text>
+                <Text style={s.matchTypeDesc}>Belirli bir kaptanı davet et</Text>
+              </TouchableOpacity>
             </View>
 
+            {/* Direct invite — username search */}
+            {matchType === 'direct' && (
+              <View style={s.inviteBox}>
+                <Text style={s.inviteBoxLabel}>Kaptan kullanıcı adı</Text>
+                <View style={s.inviteInputRow}>
+                  <TextInput
+                    style={s.inviteInput}
+                    placeholder="örn. techno"
+                    placeholderTextColor={Colors.textMuted}
+                    value={inviteUsername}
+                    onChangeText={text => { setInviteUsername(text); setInviteTeam(null); setLookupError(null); }}
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                    returnKeyType="search"
+                    onSubmitEditing={() => lookupTeamByUsername(inviteUsername)}
+                  />
+                  <TouchableOpacity
+                    style={[s.searchBtn, (!inviteUsername.trim() || lookingUpUser) && s.searchBtnDisabled]}
+                    disabled={!inviteUsername.trim() || lookingUpUser}
+                    activeOpacity={0.8}
+                    onPress={() => lookupTeamByUsername(inviteUsername)}>
+                    {lookingUpUser
+                      ? <ActivityIndicator color="#fff" size="small" />
+                      : <Text style={s.searchBtnText}>Ara</Text>}
+                  </TouchableOpacity>
+                </View>
+
+                {lookupError && (
+                  <View style={s.lookupError}>
+                    <Text style={s.lookupErrorText}>❌ {lookupError}</Text>
+                  </View>
+                )}
+                {inviteTeam && (
+                  <View style={s.lookupSuccess}>
+                    <Text style={s.lookupSuccessText}>✅ <Text style={{fontWeight: '700'}}>{inviteTeam.teamName}</Text> takımı bulundu — davet gönderilecek</Text>
+                  </View>
+                )}
+              </View>
+            )}
+
+            {matchType === 'open' && (
+              <View style={s.infoBox}>
+                <Text style={s.infoBoxText}>
+                  Maç oluşturulduktan sonra diğer kaptanlar sana meydan okuyabilir.
+                  Gelen meydan okumaları "Davetler" sekmesinden kabul veya reddedebilirsin.
+                </Text>
+              </View>
+            )}
+
             <TouchableOpacity
-              style={[s.primaryBtn, submitting && s.primaryBtnDisabled]}
-              disabled={submitting}
+              style={[s.primaryBtn, (submitting || (matchType === 'direct' && !inviteTeam)) && s.primaryBtnDisabled]}
+              disabled={submitting || (matchType === 'direct' && !inviteTeam)}
               activeOpacity={0.85}
               onPress={handleCreateMatch}>
               {submitting ? (
                 <ActivityIndicator color="#fff" />
               ) : (
-                <Text style={s.primaryBtnText}>Maç Oluştur 🏀</Text>
+                <Text style={s.primaryBtnText}>
+                  {matchType === 'open' ? 'Maç Oluştur 🏀' : `${inviteTeam?.teamName ?? '...'} Takımına Davet Gönder 📨`}
+                </Text>
               )}
             </TouchableOpacity>
           </ScrollView>
@@ -495,11 +667,94 @@ const s = StyleSheet.create({
   primaryBtnDisabled: {opacity: 0.4},
   primaryBtnText: {color: '#fff', fontSize: Typography.base, fontWeight: Typography.bold},
 
+  // Match type picker
+  matchTypeTitle: {
+    fontSize: Typography.xs,
+    fontWeight: Typography.bold,
+    color: Colors.textMuted,
+    letterSpacing: 1,
+    marginTop: Spacing.lg,
+    marginBottom: Spacing.sm,
+  },
+  matchTypeRow: {flexDirection: 'row', gap: Spacing.sm, marginBottom: Spacing.md},
+  matchTypeCard: {
+    flex: 1,
+    backgroundColor: Colors.surfaceElevated,
+    borderRadius: Radii.xl,
+    borderWidth: 1.5,
+    borderColor: Colors.border,
+    padding: Spacing.md,
+    alignItems: 'center',
+    gap: 4,
+  },
+  matchTypeCardActive: {borderColor: Colors.primary, backgroundColor: Colors.primarySubtle},
+  matchTypeIcon: {fontSize: 24},
+  matchTypeLabel: {fontSize: Typography.sm, fontWeight: Typography.bold, color: Colors.textSecondary},
+  matchTypeLabelActive: {color: Colors.primary},
+  matchTypeDesc: {fontSize: 10, color: Colors.textMuted, textAlign: 'center'},
+
+  // Invite box
+  inviteBox: {
+    backgroundColor: Colors.surfaceElevated,
+    borderRadius: Radii.xl,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    padding: Spacing.lg,
+    gap: Spacing.sm,
+    marginBottom: Spacing.md,
+  },
+  inviteBoxLabel: {fontSize: Typography.sm, fontWeight: Typography.semibold, color: Colors.textSecondary},
+  inviteInputRow: {flexDirection: 'row', gap: Spacing.sm},
+  inviteInput: {
+    flex: 1,
+    backgroundColor: Colors.surface,
+    borderRadius: Radii.lg,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    paddingHorizontal: Spacing.md,
+    paddingVertical: Spacing.sm,
+    color: Colors.textPrimary,
+    fontSize: Typography.base,
+  },
+  searchBtn: {
+    backgroundColor: Colors.primary,
+    borderRadius: Radii.lg,
+    paddingHorizontal: Spacing.lg,
+    alignItems: 'center',
+    justifyContent: 'center',
+    minWidth: 64,
+  },
+  searchBtnDisabled: {opacity: 0.4},
+  searchBtnText: {color: '#fff', fontSize: Typography.sm, fontWeight: Typography.bold},
+  lookupError: {
+    backgroundColor: 'rgba(239,68,68,0.1)',
+    borderRadius: Radii.md,
+    padding: Spacing.sm,
+  },
+  lookupErrorText: {fontSize: Typography.sm, color: Colors.accentRed},
+  lookupSuccess: {
+    backgroundColor: 'rgba(34,197,94,0.1)',
+    borderRadius: Radii.md,
+    padding: Spacing.sm,
+  },
+  lookupSuccessText: {fontSize: Typography.sm, color: Colors.accentGreen},
+
   // Location error
   locationErrorIcon: {fontSize: 48, marginBottom: Spacing.sm},
   locationErrorTitle: {fontSize: Typography.lg, fontWeight: Typography.bold, color: Colors.textPrimary},
   locationErrorMsg: {fontSize: Typography.sm, color: Colors.textMuted, textAlign: 'center', lineHeight: 20},
   detectingText: {fontSize: Typography.base, color: Colors.textMuted, marginTop: Spacing.md},
+  manualCityLabel: {fontSize: Typography.sm, color: Colors.textMuted, marginTop: Spacing.sm},
+  manualCityRow: {flexDirection: 'row', gap: Spacing.sm, marginTop: 4},
+  manualCityChip: {
+    paddingHorizontal: Spacing.lg,
+    paddingVertical: Spacing.sm,
+    borderRadius: Radii.full,
+    backgroundColor: Colors.primarySubtle,
+    borderWidth: 1,
+    borderColor: Colors.primary,
+  },
+  manualCityChipText: {fontSize: Typography.sm, fontWeight: Typography.bold, color: Colors.primary},
 });
 
 export default CreateMatchScreen;

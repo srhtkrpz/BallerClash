@@ -18,6 +18,8 @@ import MatchScreen from '../screens/Match/MatchScreen';
 import MatchDetailScreen from '../screens/Match/MatchDetailScreen';
 import PostMatchScreen from '../screens/Match/PostMatchScreen';
 import CreateMatchScreen from '../screens/Match/CreateMatchScreen';
+import MatchLobbyScreen from '../screens/Match/MatchLobbyScreen';
+import MatchResultsScreen from '../screens/Match/MatchResultsScreen';
 import LeaderboardScreen from '../screens/Leaderboard/LeaderboardScreen';
 import MapScreen from '../screens/Map/MapScreen';
 
@@ -32,8 +34,17 @@ export type RootStackParamList = {
 
 export type HomeStackParamList = {
   HomeMain: undefined;
-  CreateMatch: undefined;
+  CreateMatch: {preselectedCourt?: {id: string; name: string; city: string; address: string}} | undefined;
   MatchDetail: {matchId: string};
+  MatchLobby: {matchId: string};
+  MatchResults: {
+    matchId: string;
+    myRole: 'challenger' | 'opponent';
+    myTeamName: string;
+    opponentTeamName: string;
+    challengerTeamId: string;
+    opponentTeamId: string;
+  };
   PostMatch: {matchId: string};
   AvatarEditor: undefined;
 };
@@ -77,6 +88,8 @@ function HomeStackNavigator() {
       <HomeStack.Screen name="HomeMain" component={HomeScreen} options={{headerShown: false}} />
       <HomeStack.Screen name="CreateMatch" component={CreateMatchScreen} options={{headerShown: false}} />
       <HomeStack.Screen name="MatchDetail" component={MatchDetailScreen} options={{title: 'Maç Detayı'}} />
+      <HomeStack.Screen name="MatchLobby" component={MatchLobbyScreen} options={{headerShown: false}} />
+      <HomeStack.Screen name="MatchResults" component={MatchResultsScreen} options={{headerShown: false}} />
       <HomeStack.Screen name="PostMatch" component={PostMatchScreen} options={{title: 'Maç Sonu', headerShown: false}} />
       <HomeStack.Screen name="AvatarEditor" component={AvatarEditorScreen} options={{title: 'Avatar Düzenle'}} />
     </HomeStack.Navigator>
@@ -120,7 +133,7 @@ function MainTabNavigator() {
       <Tab.Screen
         name="TeamsTab"
         component={TeamsStackNavigator}
-        options={{tabBarLabel: 'Takımlar', tabBarIcon: ({color}) => <TabIcon icon="🏀" color={color} />}}
+        options={{tabBarLabel: 'Takımım', tabBarIcon: ({color}) => <TabIcon icon="🏀" color={color} />}}
       />
       <Tab.Screen
         name="MapTab"

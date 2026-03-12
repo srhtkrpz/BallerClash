@@ -15,7 +15,7 @@ import {getCurrentUser} from '../../services/supabase/client';
 
 type NavProp = NativeStackNavigationProp<TeamsStackParamList, 'TeamsMain'>;
 
-const MAX_TEAM_SIZE = 5;
+const MAX_TEAM_SIZE = 4;
 
 const getRatingColor = (r: number) => {
   if (r >= 8.5) {return Colors.ratingElite;}
@@ -114,7 +114,7 @@ const TeamsScreen: React.FC = () => {
     <View style={s.screen}>
       <SafeAreaView style={s.safe} edges={['top']}>
         <View style={s.header}>
-          <Text style={s.title}>Takımlar</Text>
+          <Text style={s.title}>Takımım</Text>
           {!team && !loading && (
             <TouchableOpacity
               style={s.createBtn}

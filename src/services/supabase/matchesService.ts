@@ -1,7 +1,7 @@
 import {supabase, getSession, getCurrentUser} from './client';
-import type {Match, City, MatchStatus, MatchPlayer} from '../../types/models';
+import type {Match, City, MatchStatus, MatchPlayer, MatchResultVote} from '../../types/models';
 
-function rowToMatch(row: any): Match {
+export function rowToMatch(row: any): Match {
   return {
     id: row.id,
     challengerTeamId: row.challenger_team_id,
@@ -16,6 +16,9 @@ function rowToMatch(row: any): Match {
     scoreChallenger: row.score_challenger ?? undefined,
     scoreOpponent: row.score_opponent ?? undefined,
     winnerTeamId: row.winner_team_id ?? undefined,
+    startVoteChallenger: row.start_vote_challenger ?? false,
+    startVoteOpponent: row.start_vote_opponent ?? false,
+    matchStartedAt: row.match_started_at ?? undefined,
     createdAt: row.created_at,
   };
 }
@@ -61,6 +64,9 @@ export async function createMatch(data: {
   scheduledAt: string;
   challengerTeamId: string;
   challengerTeamName: string;
+  opponentTeamId?: string;
+  opponentTeamName?: string;
+  status?: 'open' | 'pending';
 }): Promise<Match> {
   const session = await getSession();
   if (!session) {
@@ -76,7 +82,9 @@ export async function createMatch(data: {
       scheduled_at: data.scheduledAt,
       challenger_team_id: data.challengerTeamId,
       challenger_team_name: data.challengerTeamName,
-      status: 'open',
+      opponent_team_id: data.opponentTeamId ?? null,
+      opponent_team_name: data.opponentTeamName ?? null,
+      status: data.status ?? 'open',
       created_by: session.user.id,
     })
     .select()
@@ -177,6 +185,17 @@ export async function completeMatch(
     })
     .eq('id', matchId);
 
+  if (error) {
+    throw new Error(error.message);
+  }
+}
+
+export async function deleteMatch(matchId: string): Promise<void> {
+  const session = await getSession();
+  if (!session) {
+    throw new Error('Not authenticated');
+  }
+  const {error} = await supabase.from('matches').delete().eq('id', matchId);
   if (error) {
     throw new Error(error.message);
   }
@@ -291,6 +310,84 @@ export async function startMatch(matchId: string): Promise<void> {
   if (error) {
     throw error;
   }
+}
+
+// ── Match start voting ────────────────────────────────────────────────────────
+
+export async function voteStartMatch(
+  matchId: string,
+  role: 'challenger' | 'opponent',
+): Promise<Match | null> {
+  const session = await getSession();
+  if (!session) {throw new Error('Not authenticated');}
+
+  const column = role === 'challenger' ? 'start_vote_challenger' : 'start_vote_opponent';
+  await supabase.from('matches').update({[column]: true}).eq('id', matchId);
+
+  // Re-fetch to check if both voted
+  const match = await getMatchById(matchId);
+  if (match?.startVoteChallenger && match?.startVoteOpponent && match.status === 'confirmed') {
+    await supabase
+      .from('matches')
+      .update({status: 'in_progress', match_started_at: new Date().toISOString()})
+      .eq('id', matchId);
+    return getMatchById(matchId);
+  }
+  return match;
+}
+
+// ── Match result voting ───────────────────────────────────────────────────────
+
+export async function submitMatchResult(
+  matchId: string,
+  role: 'challenger' | 'opponent',
+  scoreChallenger: number,
+  scoreOpponent: number,
+  winnerTeamId: string,
+): Promise<void> {
+  const session = await getSession();
+  if (!session) {throw new Error('Not authenticated');}
+
+  await supabase.from('match_result_votes').upsert(
+    {
+      match_id: matchId,
+      team_role: role,
+      score_challenger: scoreChallenger,
+      score_opponent: scoreOpponent,
+      winner_team_id: winnerTeamId,
+      submitted_at: new Date().toISOString(),
+    },
+    {onConflict: 'match_id,team_role'},
+  );
+}
+
+export async function getMatchResultVotes(matchId: string): Promise<MatchResultVote[]> {
+  const {data} = await supabase
+    .from('match_result_votes')
+    .select('*')
+    .eq('match_id', matchId);
+
+  return (data ?? []).map((row: any) => ({
+    matchId: row.match_id,
+    teamRole: row.team_role as 'challenger' | 'opponent',
+    scoreChallenger: row.score_challenger,
+    scoreOpponent: row.score_opponent,
+    winnerTeamId: row.winner_team_id ?? undefined,
+    submittedAt: row.submitted_at,
+  }));
+}
+
+export async function finalizeMatch(
+  matchId: string,
+  scoreChallenger: number,
+  scoreOpponent: number,
+  winnerTeamId: string,
+  challengerTeamId: string,
+  opponentTeamId: string,
+): Promise<void> {
+  // completeMatch sets status='completed' which fires the DB trigger
+  // update_stats_on_match_complete — no manual stat updates needed here.
+  await completeMatch(matchId, scoreChallenger, scoreOpponent, winnerTeamId);
 }
 
 export async function getMyMatches(): Promise<Match[]> {

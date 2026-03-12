@@ -10,8 +10,30 @@ import {Colors, Typography, Spacing, Radii, Shadows} from '../../constants/theme
 import {supabase} from '../../services/supabase/client';
 import {useAuth} from '../../context/AuthContext';
 import {getMyProfile} from '../../services/supabase/profilesService';
-import type {Profile} from '../../types/models';
+import {getMyMatches} from '../../services/supabase/matchesService';
+import type {Profile, AvatarConfig, HairStyle, Match} from '../../types/models';
 import type {RootStackParamList} from '../../navigation/AppNavigator';
+import BasketbolcuAvatar, {type AvatarColors} from '../../components/BasketbolcuAvatar';
+
+const DEFAULT_AVATAR: AvatarColors = {
+  skin: '#F1C27D', hairColor: '#111111', hairStyle: 'short',
+  eyeColor: '#3a2a1a', jerseyColor: '#f97316', jerseyNumber: 23,
+  shortsColor: '#111111', shoesColor: '#111111',
+};
+
+function toAvatarColors(cfg?: AvatarConfig): AvatarColors {
+  if (!cfg) {return DEFAULT_AVATAR;}
+  return {
+    skin:         cfg.skin          ?? DEFAULT_AVATAR.skin,
+    hairColor:    cfg.hairColor     ?? DEFAULT_AVATAR.hairColor,
+    hairStyle:    (cfg.hairStyle    ?? DEFAULT_AVATAR.hairStyle) as HairStyle,
+    eyeColor:     cfg.eyeColor      ?? DEFAULT_AVATAR.eyeColor,
+    jerseyColor:  cfg.jerseyColor   ?? DEFAULT_AVATAR.jerseyColor,
+    jerseyNumber: cfg.jerseyNumber  ?? DEFAULT_AVATAR.jerseyNumber,
+    shortsColor:  cfg.shorts        ?? DEFAULT_AVATAR.shortsColor,
+    shoesColor:   cfg.shoes         ?? DEFAULT_AVATAR.shoesColor,
+  };
+}
 
 type NavProp = NativeStackNavigationProp<RootStackParamList, 'Main'>;
 
@@ -33,6 +55,7 @@ const ProfileScreen: React.FC = () => {
   const {user} = useAuth();
   const navigation = useNavigation<NavProp>();
   const [profile, setProfile] = useState<Profile | null>(null);
+  const [matchHistory, setMatchHistory] = useState<Match[]>([]);
   const [loading, setLoading] = useState(true);
 
   const loadProfile = useCallback(async () => {
@@ -43,6 +66,8 @@ const ProfileScreen: React.FC = () => {
       return;
     }
     setProfile(data);
+    const allMatches = await getMyMatches();
+    setMatchHistory(allMatches.filter(m => m.status === 'completed'));
     setLoading(false);
   }, [navigation]);
 
@@ -69,10 +94,12 @@ const ProfileScreen: React.FC = () => {
       <SafeAreaView style={ps.safe} edges={['top']}>
         <ScrollView contentContainerStyle={ps.scroll} showsVerticalScrollIndicator={false}>
 
-          {/* Avatar placeholder */}
+          {/* Avatar */}
           <View style={ps.avatarSection}>
             <View style={ps.avatarCircle}>
-              <Text style={ps.avatarEmoji}>⛹️</Text>
+              <View style={ps.avatarCrop}>
+                <BasketbolcuAvatar colors={toAvatarColors(profile?.avatarConfig)} size={185} />
+              </View>
             </View>
             <Text style={ps.username}>{profile?.username ?? 'Kullanıcı'}</Text>
             <Text style={ps.email}>{user?.email}</Text>
@@ -104,12 +131,37 @@ const ProfileScreen: React.FC = () => {
             <StatBox label="Seri" value={profile?.winStreak ?? 0} color={Colors.accentGold} />
           </View>
 
-          {/* Match history placeholder */}
+          {/* Match history */}
           <View style={ps.section}>
             <Text style={ps.sectionTitle}>MAÇ GEÇMİŞİ</Text>
-            <View style={ps.emptyBox}>
-              <Text style={ps.emptyText}>Henüz tamamlanmış maç yok.</Text>
-            </View>
+            {matchHistory.length === 0 ? (
+              <View style={ps.emptyBox}>
+                <Text style={ps.emptyText}>Henüz tamamlanmış maç yok.</Text>
+              </View>
+            ) : (
+              matchHistory.map(m => {
+                const isChallenger = !!profile?.teamId && m.challengerTeamId === profile.teamId;
+                const myScore  = isChallenger ? m.scoreChallenger : m.scoreOpponent;
+                const oppScore = isChallenger ? m.scoreOpponent   : m.scoreChallenger;
+                const opponent = isChallenger ? (m.opponentTeamName ?? 'Rakip') : m.challengerTeamName;
+                const won = m.winnerTeamId === profile?.teamId;
+                const date = new Date(m.scheduledAt).toLocaleDateString('tr-TR', {day: 'numeric', month: 'short', year: 'numeric'});
+                return (
+                  <View key={m.id} style={[ps.matchRow, won ? ps.matchRowWin : ps.matchRowLoss]}>
+                    <View style={[ps.matchResult, won ? ps.matchResultWin : ps.matchResultLoss]}>
+                      <Text style={ps.matchResultText}>{won ? 'G' : 'M'}</Text>
+                    </View>
+                    <View style={ps.matchInfo}>
+                      <Text style={ps.matchOpponent} numberOfLines={1}>{opponent}</Text>
+                      <Text style={ps.matchDate}>{date} · {m.courtName}</Text>
+                    </View>
+                    <Text style={[ps.matchScore, won ? {color: Colors.accentGreen} : {color: Colors.accentRed}]}>
+                      {myScore ?? '?'}–{oppScore ?? '?'}
+                    </Text>
+                  </View>
+                );
+              })
+            )}
           </View>
 
           {/* Sign out */}
@@ -132,12 +184,18 @@ const ps = StyleSheet.create({
   scroll: {paddingBottom: Spacing.xxxl},
   avatarSection: {alignItems: 'center', paddingTop: Spacing.xl, paddingBottom: Spacing.lg, gap: 8},
   avatarCircle: {
-    width: 100, height: 100, borderRadius: 50,
+    width: 110, height: 110, borderRadius: 55,
     backgroundColor: Colors.primarySubtle,
     borderWidth: 2, borderColor: Colors.primary,
-    alignItems: 'center', justifyContent: 'center',
+    overflow: 'hidden',
   },
-  avatarEmoji: {fontSize: 48},
+  // size=185 → hair(y=34)→28.6px, waist(y=148)→124.5px
+  // center of range = 76.5px; circle center = 55px → top = 55-76.5 = -21.5 ≈ -22
+  avatarCrop: {
+    position: 'absolute',
+    top: -22,
+    left: (110 - 185) / 2 + 12,
+  },
   username: {fontSize: Typography.xl, fontWeight: Typography.heavy, color: Colors.textPrimary},
   email: {fontSize: Typography.sm, color: Colors.textMuted},
   editBtn: {
@@ -186,6 +244,25 @@ const ps = StyleSheet.create({
     alignItems: 'center',
   },
   emptyText: {fontSize: Typography.sm, color: Colors.textMuted},
+  matchRow: {
+    flexDirection: 'row', alignItems: 'center', gap: Spacing.md,
+    backgroundColor: Colors.surface, borderRadius: Radii.lg,
+    borderWidth: 1, borderColor: Colors.border,
+    padding: Spacing.md, marginBottom: Spacing.sm,
+  },
+  matchRowWin:  {borderColor: `${Colors.accentGreen}40`},
+  matchRowLoss: {borderColor: `${Colors.accentRed}30`},
+  matchResult: {
+    width: 32, height: 32, borderRadius: Radii.full,
+    alignItems: 'center', justifyContent: 'center',
+  },
+  matchResultWin:  {backgroundColor: `${Colors.accentGreen}20`},
+  matchResultLoss: {backgroundColor: `${Colors.accentRed}20`},
+  matchResultText: {fontSize: Typography.sm, fontWeight: Typography.bold, color: Colors.textPrimary},
+  matchInfo: {flex: 1, gap: 2},
+  matchOpponent: {fontSize: Typography.sm, fontWeight: Typography.semibold, color: Colors.textPrimary},
+  matchDate: {fontSize: Typography.xs, color: Colors.textMuted},
+  matchScore: {fontSize: Typography.base, fontWeight: Typography.bold},
   signOutBtn: {
     marginHorizontal: Spacing.lg,
     marginTop: Spacing.xl,
